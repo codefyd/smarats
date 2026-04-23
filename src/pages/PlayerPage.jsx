@@ -6,13 +6,11 @@ export default function PlayerPage() {
   const { publicId } = useParams()
   const navigate = useNavigate()
 
-  const [status, setStatus] = useState('loading')
+  const [status, setStatus] = useState('loading') // loading | error | ready | locked
   const [errorMsg, setErrorMsg] = useState('')
   const [screen, setScreen] = useState(null)
   const [items, setItems] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
-  // لتتبع إذا تم تجربة الـ fallback للعنصر الحالي
-  const [useFallback, setUseFallback] = useState(false)
 
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
@@ -24,6 +22,7 @@ export default function PlayerPage() {
   // --------------------------------------------------------------------------
   const loadData = useCallback(async () => {
     try {
+      // 1) جلب بيانات الشاشة عبر الدالة العامة
       const { data: screenData, error: screenErr } = await supabase
         .rpc('get_public_screen', { _public_id: publicId })
         .maybeSingle()
@@ -47,6 +46,7 @@ export default function PlayerPage() {
 
       setScreen(screenData)
 
+      // 2) التحقق من الحماية بكلمة سر
       if (screenData.has_password) {
         const unlocked = sessionStorage.getItem(`smarats_unlock_${publicId}`) ||
                          localStorage.getItem(`smarats_unlock_${publicId}`)
@@ -56,6 +56,7 @@ export default function PlayerPage() {
         }
       }
 
+      // 3) جلب عناصر قائمة العرض
       const { data: itemsData, error: itemsErr } = await supabase
         .rpc('get_public_playlist_items', { _public_id: publicId })
 
@@ -80,14 +81,7 @@ export default function PlayerPage() {
   useEffect(() => { loadData() }, [loadData])
 
   // --------------------------------------------------------------------------
-  // إعادة تعيين fallback عند تغيير العنصر
-  // --------------------------------------------------------------------------
-  useEffect(() => {
-    setUseFallback(false)
-  }, [currentIdx])
-
-  // --------------------------------------------------------------------------
-  // Wake Lock
+  // Wake Lock — منع شاشة التوقف
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
@@ -120,7 +114,7 @@ export default function PlayerPage() {
   }, [status])
 
   // --------------------------------------------------------------------------
-  // إعادة تحميل دورية كل ساعة
+  // إعادة تحميل تلقائية كل ساعة لجلب التحديثات
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
@@ -140,7 +134,7 @@ export default function PlayerPage() {
   }, [status, loadData])
 
   // --------------------------------------------------------------------------
-  // منطق التقدم
+  // منطق التقدم بين العناصر
   // --------------------------------------------------------------------------
   function goNext() {
     setCurrentIdx(idx => (idx + 1) % items.length)
@@ -164,43 +158,17 @@ export default function PlayerPage() {
   }, [currentIdx, status, items])
 
   // --------------------------------------------------------------------------
-  // معالجة أخطاء الوسائط
+  // معالجة أخطاء الوسائط — تخطي للعنصر التالي
   // --------------------------------------------------------------------------
-  function handleMediaError(item) {
-    // لصور درايف: جرّب fallback قبل التخطي
-    if (item.item_type === 'drive_image' && !useFallback) {
-      console.warn('Drive thumbnail failed, trying fallback')
-      setUseFallback(true)
-      return
-    }
-
-    console.warn('Media failed, skipping to next:', item.original_url || item.resolved_url)
+  function handleMediaError(e) {
+    console.warn(
+      'Media failed, skipping to next:',
+      e?.target?.currentSrc || e?.target?.src || item?.resolved_url
+    )
     clearTimeout(advanceTimerRef.current)
     advanceTimerRef.current = setTimeout(goNext, 1500)
   }
 
-  // --------------------------------------------------------------------------
-  // استخراج file ID من رابط درايف (للـ fallback)
-  // --------------------------------------------------------------------------
-  function getDriveIdFromThumbnailUrl(url) {
-    const m = url.match(/[?&]id=([a-zA-Z0-9_-]+)/)
-    return m ? m[1] : null
-  }
-
-  function getImageUrlForItem(item) {
-    if (item.item_type !== 'drive_image') return item.resolved_url
-
-    // إذا فشل thumbnail، استخدم uc?export=view كخطة بديلة
-    if (useFallback) {
-      const id = getDriveIdFromThumbnailUrl(item.resolved_url)
-      if (id) return `https://drive.google.com/uc?export=view&id=${id}`
-    }
-    return item.resolved_url
-  }
-
-  // --------------------------------------------------------------------------
-  // شاشات الحالة
-  // --------------------------------------------------------------------------
   if (status === 'loading') {
     return (
       <div className="player-root flex items-center justify-center">
@@ -232,13 +200,12 @@ export default function PlayerPage() {
 
   return (
     <div className="player-root">
-      <div key={`${item.id}-${useFallback ? 'fb' : 'main'}`} className="player-media">
+      <div key={item.id} className="player-media">
         {(item.item_type === 'image' || item.item_type === 'drive_image') && (
           <img
-            src={getImageUrlForItem(item)}
+            src={item.resolved_url}
             alt={item.title || ''}
-            onError={() => handleMediaError(item)}
-            referrerPolicy="no-referrer"
+            onError={handleMediaError}
           />
         )}
 
@@ -248,7 +215,7 @@ export default function PlayerPage() {
             title={item.title || 'YouTube'}
             allow="autoplay; encrypted-media"
             allowFullScreen
-            onError={() => handleMediaError(item)}
+            onError={handleMediaError}
           />
         )}
 
@@ -258,7 +225,7 @@ export default function PlayerPage() {
             title={item.title || 'Drive video'}
             allow="autoplay"
             allowFullScreen
-            onError={() => handleMediaError(item)}
+            onError={handleMediaError}
           />
         )}
 
@@ -270,7 +237,7 @@ export default function PlayerPage() {
             muted
             playsInline
             onEnded={goNext}
-            onError={() => handleMediaError(item)}
+            onError={handleMediaError}
           />
         )}
       </div>

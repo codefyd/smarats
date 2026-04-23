@@ -1,48 +1,22 @@
-import { useEffect, useRef, useState, useCallback } from 'react'
+import { useEffect, useMemo, useRef, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
-  extractYouTubeId,
-  buildYouTubeThumbUrl,
   extractDriveFileId,
-  buildDriveImageUrl,
+  extractYouTubeId,
   buildDriveVideoStreamUrl,
-  buildDriveVideoFallbackStreamUrl
+  buildDriveVideoFallbackUrl,
+  buildYouTubeEmbedUrl,
+  buildPosterForItem,
+  isImageType,
+  isNativeVideoType
 } from '../lib/urlUtils'
 
-let youtubeApiPromise = null
-
-function loadYouTubeApi() {
-  if (window.YT?.Player) return Promise.resolve(window.YT)
-  if (youtubeApiPromise) return youtubeApiPromise
-
-  youtubeApiPromise = new Promise((resolve) => {
-    const existing = document.querySelector('script[src="https://www.youtube.com/iframe_api"]')
-
-    if (!existing) {
-      const tag = document.createElement('script')
-      tag.src = 'https://www.youtube.com/iframe_api'
-      document.body.appendChild(tag)
-    }
-
-    const prev = window.onYouTubeIframeAPIReady
-    window.onYouTubeIframeAPIReady = () => {
-      prev?.()
-      resolve(window.YT)
-    }
-
-    const timer = setInterval(() => {
-      if (window.YT?.Player) {
-        clearInterval(timer)
-        resolve(window.YT)
-      }
-    }, 200)
-  })
-
-  return youtubeApiPromise
+function otherLayerName(name) {
+  return name === 'a' ? 'b' : 'a'
 }
 
-function arraysEqualByIdentity(a, b) {
+function itemsEqual(a, b) {
   if (a.length !== b.length) return false
 
   for (let i = 0; i < a.length; i += 1) {
@@ -55,323 +29,149 @@ function arraysEqualByIdentity(a, b) {
   return true
 }
 
-function safeNextIndex(index, itemsLength) {
-  if (!itemsLength) return 0
-  return (index + 1) % itemsLength
-}
-
-function getPosterUrl(item) {
-  if (!item) return ''
-
-  if (item.item_type === 'image' || item.item_type === 'drive_image') {
-    return item.resolved_url
-  }
-
-  if (item.item_type === 'youtube') {
-    const id = extractYouTubeId(item.original_url || item.resolved_url)
-    return id ? buildYouTubeThumbUrl(id) : ''
-  }
-
-  if (item.item_type === 'drive_video') {
-    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-    return fileId ? buildDriveImageUrl(fileId) : ''
-  }
-
-  return ''
-}
-
-function getVideoSources(item) {
-  if (!item) return []
-
-  if (item.item_type === 'mp4') {
-    return [item.resolved_url]
-  }
-
-  if (item.item_type === 'drive_video') {
-    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-    if (!fileId) return [item.resolved_url]
-
-    return [
-      buildDriveVideoStreamUrl(fileId),
-      buildDriveVideoFallbackStreamUrl(fileId)
-    ]
-  }
-
-  return []
-}
-
-function preconnectOnce(href) {
+function ensurePreconnect(href) {
   if (!href) return
-  const exists = document.head.querySelector(`link[data-preconnect="${href}"]`)
+  const exists = document.head.querySelector(`link[rel="preconnect"][href="${href}"]`)
   if (exists) return
 
   const link = document.createElement('link')
   link.rel = 'preconnect'
   link.href = href
-  link.setAttribute('data-preconnect', href)
+  link.crossOrigin = 'anonymous'
   document.head.appendChild(link)
 }
 
-function preloadItem(item) {
-  if (!item) return
-
-  if (item.item_type === 'image' || item.item_type === 'drive_image') {
-    const img = new Image()
-    img.src = item.resolved_url
-    return
-  }
-
-  if (item.item_type === 'youtube') {
-    const id = extractYouTubeId(item.original_url || item.resolved_url)
-    if (id) {
-      const img = new Image()
-      img.src = buildYouTubeThumbUrl(id)
-    }
-    return
-  }
-
-  if (item.item_type === 'mp4' || item.item_type === 'drive_video') {
-    const video = document.createElement('video')
-    video.preload = 'auto'
-    video.muted = true
-    video.playsInline = true
-    const sources = getVideoSources(item)
-
-    if (sources[0]) {
-      video.src = sources[0]
-      video.load()
-    }
-  }
-}
-
-function AmbientBackdrop() {
-  return <div className="player-static-backdrop" />
-}
-
 function MediaLayer({
+  layerName,
   item,
   visible,
-  isActive,
-  onEnded,
+  onReady,
   onError,
-  onReady
+  onEnded
 }) {
+  const [iframeReady, setIframeReady] = useState(false)
   const videoRef = useRef(null)
-  const youtubeContainerRef = useRef(null)
-  const youtubePlayerRef = useRef(null)
-  const readyNotifiedRef = useRef(false)
-
-  const markReady = useCallback(() => {
-    if (readyNotifiedRef.current) return
-    readyNotifiedRef.current = true
-    onReady?.()
-  }, [onReady])
 
   useEffect(() => {
-    readyNotifiedRef.current = false
-  }, [item])
+    setIframeReady(false)
+  }, [item?.id])
 
-  const cleanupYoutube = useCallback(() => {
-    if (youtubePlayerRef.current?.destroy) {
-      try {
-        youtubePlayerRef.current.destroy()
-      } catch (_) {}
-    }
-    youtubePlayerRef.current = null
-
-    if (youtubeContainerRef.current) {
-      youtubeContainerRef.current.innerHTML = ''
-    }
-  }, [])
-
-  useEffect(() => {
-    return () => cleanupYoutube()
-  }, [cleanupYoutube])
-
-  useEffect(() => {
-    if (!item) return
-
-    if (item.item_type === 'image' || item.item_type === 'drive_image') {
-      markReady()
-    }
-  }, [item, markReady])
-
-  useEffect(() => {
-    if (!item) return
-    if (item.item_type !== 'mp4' && item.item_type !== 'drive_video') return
-
-    const video = videoRef.current
-    if (!video) return
-
-    const handleCanPlay = () => {
-      markReady()
-      if (isActive) {
-        const p = video.play()
-        if (p?.catch) p.catch(() => onError?.({ target: video }))
-      }
-    }
-
-    video.addEventListener('canplay', handleCanPlay)
-
-    if (isActive) {
-      try {
-        video.currentTime = 0
-      } catch (_) {}
-
-      const p = video.play()
-      if (p?.catch) {
-        p.catch(() => {
-          /* ننتظر canplay */
-        })
-      }
-    } else {
-      try {
-        video.pause()
-      } catch (_) {}
-    }
-
-    return () => {
-      video.removeEventListener('canplay', handleCanPlay)
-    }
-  }, [item, isActive, markReady, onError])
-
-  useEffect(() => {
-    if (!item || item.item_type !== 'youtube') {
-      cleanupYoutube()
-      return
-    }
-
-    if (!isActive) {
-      return
-    }
-
-    let cancelled = false
-    const videoId = extractYouTubeId(item.original_url || item.resolved_url)
-
-    if (!videoId) {
-      onError?.()
-      return
-    }
-
-    async function mountYoutubePlayer() {
-      try {
-        await loadYouTubeApi()
-        if (cancelled || !youtubeContainerRef.current || !window.YT?.Player) return
-
-        cleanupYoutube()
-
-        youtubePlayerRef.current = new window.YT.Player(youtubeContainerRef.current, {
-          videoId,
-          playerVars: {
-            autoplay: 1,
-            controls: 0,
-            rel: 0,
-            modestbranding: 1,
-            playsinline: 1,
-            mute: 1,
-            fs: 0,
-            iv_load_policy: 3,
-            disablekb: 1
-          },
-          events: {
-            onReady: (event) => {
-              markReady()
-              try {
-                event.target.mute()
-                event.target.playVideo()
-              } catch (_) {}
-            },
-            onStateChange: (event) => {
-              if (cancelled) return
-
-              if (event.data === window.YT.PlayerState.ENDED) {
-                onEnded?.()
-              }
-
-              if (event.data === window.YT.PlayerState.PLAYING) {
-                markReady()
-              }
-            },
-            onError: () => {
-              onError?.()
-            }
-          }
-        })
-      } catch (e) {
-        console.warn('YouTube init failed:', e)
-        onError?.()
-      }
-    }
-
-    mountYoutubePlayer()
-
-    return () => {
-      cancelled = true
-      cleanupYoutube()
-    }
-  }, [item, isActive, onEnded, onError, cleanupYoutube, markReady])
+  const poster = useMemo(() => buildPosterForItem(item), [item])
 
   if (!item) {
     return (
-      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`} />
+      <div
+        className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}
+        data-layer={layerName}
+      />
     )
   }
 
-  const posterUrl = getPosterUrl(item)
-  const videoSources = getVideoSources(item)
+  let body = null
 
-  return (
-    <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
-      <AmbientBackdrop />
+  if (isImageType(item.item_type)) {
+    body = (
+      <img
+        src={item.resolved_url}
+        alt={item.title || ''}
+        className="player-media-el"
+        draggable="false"
+        onLoad={onReady}
+        onError={onError}
+      />
+    )
+  } else if (item.item_type === 'youtube') {
+    const videoId = extractYouTubeId(item.original_url || item.resolved_url)
+    const src = videoId
+      ? buildYouTubeEmbedUrl(videoId, false)
+      : item.resolved_url
 
-      <div className="player-content-wrap">
-        {(item.item_type === 'image' || item.item_type === 'drive_image') && (
+    body = (
+      <div className="player-youtube-shell">
+        {!iframeReady && poster ? (
           <img
-            src={item.resolved_url}
-            alt={item.title || ''}
-            className="player-media-element player-image"
-            onLoad={markReady}
-            onError={onError}
+            src={poster}
+            alt=""
+            className="player-media-el player-poster-overlay"
             draggable="false"
           />
-        )}
+        ) : null}
 
-        {(item.item_type === 'mp4' || item.item_type === 'drive_video') && (
-          <video
-            ref={videoRef}
-            className="player-media-element"
-            muted
-            playsInline
-            preload="auto"
-            controls={false}
-            poster={posterUrl || undefined}
-            onEnded={onEnded}
-            onError={onError}
-          >
-            {videoSources.map((src, i) => (
-              <source key={`${item.id}-source-${i}`} src={src} type="video/mp4" />
-            ))}
-          </video>
-        )}
-
-        {item.item_type === 'youtube' && (
-          <div className="player-youtube-shell">
-            {!isActive && posterUrl ? (
-              <img
-                src={posterUrl}
-                alt={item.title || ''}
-                className="player-media-element player-image"
-                draggable="false"
-              />
-            ) : null}
-
-            <div
-              ref={youtubeContainerRef}
-              className={`player-youtube-api ${isActive ? 'player-youtube-api-visible' : 'player-youtube-api-hidden'}`}
-            />
-          </div>
-        )}
+        <iframe
+          src={src}
+          title={item.title || 'YouTube'}
+          className="player-media-el"
+          allow="autoplay; encrypted-media"
+          allowFullScreen={false}
+          onLoad={() => {
+            setIframeReady(true)
+            onReady?.()
+          }}
+          onError={onError}
+        />
       </div>
+    )
+  } else if (item.item_type === 'drive_video') {
+    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
+    const primary = fileId ? buildDriveVideoStreamUrl(fileId) : item.resolved_url
+    const fallback = fileId ? buildDriveVideoFallbackUrl(fileId) : ''
+
+    body = (
+      <video
+        ref={videoRef}
+        className="player-media-el"
+        autoPlay={visible}
+        muted
+        playsInline
+        preload="auto"
+        controls={false}
+        poster={poster || undefined}
+        onCanPlay={() => onReady?.()}
+        onLoadedData={() => onReady?.()}
+        onEnded={onEnded}
+        onError={onError}
+      >
+        <source src={primary} type="video/mp4" />
+        {fallback ? <source src={fallback} type="video/mp4" /> : null}
+      </video>
+    )
+  } else if (item.item_type === 'mp4') {
+    body = (
+      <video
+        ref={videoRef}
+        className="player-media-el"
+        src={item.resolved_url}
+        autoPlay={visible}
+        muted
+        playsInline
+        preload="auto"
+        controls={false}
+        poster={poster || undefined}
+        onCanPlay={() => onReady?.()}
+        onLoadedData={() => onReady?.()}
+        onEnded={onEnded}
+        onError={onError}
+      />
+    )
+  } else {
+    body = (
+      <img
+        src={item.resolved_url}
+        alt={item.title || ''}
+        className="player-media-el"
+        draggable="false"
+        onLoad={onReady}
+        onError={onError}
+      />
+    )
+  }
+
+  return (
+    <div
+      className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}
+      data-layer={layerName}
+    >
+      {body}
     </div>
   )
 }
@@ -387,19 +187,20 @@ export default function PlayerPage() {
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeLayer, setActiveLayer] = useState('a')
 
-  const [layerA, setLayerA] = useState(null)
-  const [layerB, setLayerB] = useState(null)
+  const [layers, setLayers] = useState({
+    a: null,
+    b: null
+  })
 
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
   const pollTimerRef = useRef(null)
-  const transitionLockRef = useRef(false)
+  const pendingSwapRef = useRef(false)
+  const layerReadyRef = useRef({ a: false, b: false })
 
   const itemsRef = useRef([])
   const currentIdxRef = useRef(0)
-  const pendingTargetRef = useRef(null)
-  const pendingReadyRef = useRef(false)
 
   useEffect(() => {
     itemsRef.current = items
@@ -410,33 +211,17 @@ export default function PlayerPage() {
   }, [currentIdx])
 
   useEffect(() => {
-    preconnectOnce('https://www.youtube.com')
-    preconnectOnce('https://i.ytimg.com')
-    preconnectOnce('https://drive.google.com')
-    preconnectOnce('https://drive.googleusercontent.com')
-    preconnectOnce('https://googleusercontent.com')
+    ensurePreconnect('https://www.youtube.com')
+    ensurePreconnect('https://www.youtube-nocookie.com')
+    ensurePreconnect('https://i.ytimg.com')
+    ensurePreconnect('https://drive.google.com')
+    ensurePreconnect('https://drive.googleusercontent.com')
   }, [])
 
-  const buildPair = useCallback((index, list, active = 'a') => {
-    if (!list.length) return
-
-    const currentItem = list[index]
-    const nextIndex = safeNextIndex(index, list.length)
-    const nextItem = list[nextIndex]
-
-    if (active === 'a') {
-      setLayerA({ item: currentItem, index })
-      setLayerB({ item: nextItem, index: nextIndex })
-      setActiveLayer('a')
-    } else {
-      setLayerB({ item: currentItem, index })
-      setLayerA({ item: nextItem, index: nextIndex })
-      setActiveLayer('b')
-    }
-
-    preloadItem(nextItem)
-    preloadItem(list[safeNextIndex(nextIndex, list.length)])
-  }, [])
+  const currentItem = items[currentIdx] || null
+  const nextIdx = items.length ? (currentIdx + 1) % items.length : 0
+  const nextItem = items[nextIdx] || null
+  const inactiveLayer = otherLayerName(activeLayer)
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -493,46 +278,63 @@ export default function PlayerPage() {
       if (!preserveCurrent) {
         setItems(nextItems)
         setCurrentIdx(0)
-        buildPair(0, nextItems, 'a')
         setStatus('ready')
         return
       }
 
       const prevItems = itemsRef.current
       const prevIdx = currentIdxRef.current
-      const currentItem = prevItems?.[prevIdx]
+      const currentVisible = prevItems[prevIdx]
 
-      if (arraysEqualByIdentity(prevItems, nextItems)) {
+      if (itemsEqual(prevItems, nextItems)) {
         setStatus('ready')
         return
       }
 
-      let resolvedIndex = 0
+      setItems(nextItems)
 
-      if (currentItem) {
-        const sameItemNewIndex = nextItems.findIndex(i => i.id === currentItem.id)
-        if (sameItemNewIndex >= 0) {
-          resolvedIndex = sameItemNewIndex
-        } else {
-          resolvedIndex = Math.min(prevIdx, Math.max(nextItems.length - 1, 0))
-        }
+      if (!currentVisible) {
+        setCurrentIdx((prev) => Math.min(prev, Math.max(nextItems.length - 1, 0)))
+        setStatus('ready')
+        return
       }
 
-      setItems(nextItems)
-      setCurrentIdx(resolvedIndex)
-      buildPair(resolvedIndex, nextItems, activeLayer)
+      const sameItemNewIndex = nextItems.findIndex((x) => x.id === currentVisible.id)
+
+      if (sameItemNewIndex >= 0) {
+        setCurrentIdx(sameItemNewIndex)
+      } else {
+        setCurrentIdx((prev) => Math.min(prev, Math.max(nextItems.length - 1, 0)))
+      }
+
       setStatus('ready')
     } catch (err) {
       console.error('Player load error:', err)
       setStatus('error')
       setErrorMsg(err.message || 'حدث خطأ')
     }
-  }, [publicId, navigate, buildPair, activeLayer])
+  }, [publicId, navigate])
 
   useEffect(() => {
     loadData(false)
   }, [loadData])
 
+  // مزامنة الطبقتين: الحالية والآتية
+  useEffect(() => {
+    if (status !== 'ready' || !currentItem) return
+
+    layerReadyRef.current[activeLayer] = false
+    layerReadyRef.current[inactiveLayer] = false
+    pendingSwapRef.current = false
+
+    setLayers((prev) => ({
+      ...prev,
+      [activeLayer]: currentItem,
+      [inactiveLayer]: nextItem || null
+    }))
+  }, [status, currentItem, nextItem, activeLayer, inactiveLayer])
+
+  // Wake Lock
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -563,6 +365,7 @@ export default function PlayerPage() {
     }
   }, [status])
 
+  // إعادة تحميل طويلة
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -573,6 +376,7 @@ export default function PlayerPage() {
     return () => clearTimeout(reloadTimerRef.current)
   }, [status])
 
+  // polling للتحديث
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -583,93 +387,80 @@ export default function PlayerPage() {
     return () => clearInterval(pollTimerRef.current)
   }, [status, loadData])
 
+  // إعادة محاولة عند الخطأ
   useEffect(() => {
     if (status !== 'error') return
     const t = setTimeout(() => loadData(false), 30000)
     return () => clearTimeout(t)
   }, [status, loadData])
 
-  const completeTransition = useCallback(() => {
-    const targetIndex = pendingTargetRef.current
-    if (targetIndex == null) return
+  const swapToNext = useCallback(() => {
+    const hiddenLayer = otherLayerName(activeLayer)
 
-    setCurrentIdx(targetIndex)
-    setActiveLayer(prev => (prev === 'a' ? 'b' : 'a'))
-
-    const list = itemsRef.current
-    const nextIndex = safeNextIndex(targetIndex, list.length)
-    const nextItem = list[nextIndex]
-
-    if (activeLayer === 'a') {
-      setLayerA({ item: nextItem, index: nextIndex })
-    } else {
-      setLayerB({ item: nextItem, index: nextIndex })
+    if (!layers[hiddenLayer]) {
+      setCurrentIdx((idx) => {
+        const list = itemsRef.current
+        if (!list.length) return 0
+        return (idx + 1) % list.length
+      })
+      setActiveLayer(hiddenLayer)
+      return
     }
 
-    preloadItem(nextItem)
-    preloadItem(list[safeNextIndex(nextIndex, list.length)])
+    setActiveLayer(hiddenLayer)
+    setCurrentIdx((idx) => {
+      const list = itemsRef.current
+      if (!list.length) return 0
+      return (idx + 1) % list.length
+    })
+  }, [activeLayer, layers])
 
-    pendingTargetRef.current = null
-    pendingReadyRef.current = false
+  const requestAdvance = useCallback(() => {
+    const hiddenLayer = otherLayerName(activeLayer)
+    const prepared = layers[hiddenLayer]
+    const ready = layerReadyRef.current[hiddenLayer]
 
-    setTimeout(() => {
-      transitionLockRef.current = false
-    }, 50)
-  }, [activeLayer])
-
-  const goToIndex = useCallback((nextIndex) => {
-    const list = itemsRef.current
-    if (!list.length) return
-    if (transitionLockRef.current) return
-
-    transitionLockRef.current = true
-    pendingTargetRef.current = nextIndex
-    pendingReadyRef.current = false
-    clearTimeout(advanceTimerRef.current)
-
-    const targetItem = list[nextIndex]
-
-    if (activeLayer === 'a') {
-      setLayerB({ item: targetItem, index: nextIndex })
-    } else {
-      setLayerA({ item: targetItem, index: nextIndex })
+    if (!prepared) {
+      swapToNext()
+      return
     }
 
-    if (targetItem.item_type === 'image' || targetItem.item_type === 'drive_image') {
-      pendingReadyRef.current = true
-      setTimeout(() => completeTransition(), 40)
+    if (ready) {
+      swapToNext()
+      return
     }
-  }, [activeLayer, completeTransition])
 
-  const goNext = useCallback(() => {
-    const list = itemsRef.current
-    if (!list.length) return
-    goToIndex(safeNextIndex(currentIdxRef.current, list.length))
-  }, [goToIndex])
+    pendingSwapRef.current = true
+  }, [activeLayer, layers, swapToNext])
 
   const scheduleAdvance = useCallback((seconds) => {
     clearTimeout(advanceTimerRef.current)
     advanceTimerRef.current = setTimeout(() => {
-      goNext()
+      requestAdvance()
     }, Math.max(1, Number(seconds) || 10) * 1000)
-  }, [goNext])
+  }, [requestAdvance])
 
-  const handleMediaReady = useCallback(() => {
-    if (pendingTargetRef.current == null) return
-    if (pendingReadyRef.current) return
+  // إدارة توقيت العنصر الحالي
+  useEffect(() => {
+    if (status !== 'ready' || !currentItem) return
 
-    pendingReadyRef.current = true
-    completeTransition()
-  }, [completeTransition])
+    clearTimeout(advanceTimerRef.current)
 
-  const handleMediaEnded = useCallback(() => {
-    if (itemsRef.current.length <= 1) {
-      goToIndex(0)
-      return
+    if (isImageType(currentItem.item_type) || currentItem.item_type === 'youtube') {
+      scheduleAdvance(currentItem.duration_seconds)
     }
 
-    goNext()
-  }, [goNext, goToIndex])
+    return () => clearTimeout(advanceTimerRef.current)
+  }, [status, currentItem, scheduleAdvance])
+
+  const handleLayerReady = useCallback((layerName) => {
+    layerReadyRef.current[layerName] = true
+
+    if (pendingSwapRef.current && layerName === otherLayerName(activeLayer)) {
+      pendingSwapRef.current = false
+      swapToNext()
+    }
+  }, [activeLayer, swapToNext])
 
   const handleMediaError = useCallback((e) => {
     console.warn(
@@ -677,30 +468,24 @@ export default function PlayerPage() {
       e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
     )
 
-    pendingTargetRef.current = null
-    pendingReadyRef.current = false
-    transitionLockRef.current = false
-
-    clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(() => {
-      goNext()
-    }, 1200)
-  }, [goNext])
-
-  useEffect(() => {
-    if (status !== 'ready' || items.length === 0) return
-
-    const item = items[currentIdx]
-    if (!item) return
-
     clearTimeout(advanceTimerRef.current)
 
-    if (item.item_type === 'image' || item.item_type === 'drive_image') {
-      scheduleAdvance(item.duration_seconds)
+    const hiddenLayer = otherLayerName(activeLayer)
+    layerReadyRef.current[hiddenLayer] = true
+
+    setTimeout(() => {
+      requestAdvance()
+    }, 700)
+  }, [activeLayer, requestAdvance])
+
+  const handleNativeVideoEnded = useCallback(() => {
+    if (itemsRef.current.length <= 1) {
+      requestAdvance()
+      return
     }
 
-    return () => clearTimeout(advanceTimerRef.current)
-  }, [currentIdx, items, status, scheduleAdvance])
+    requestAdvance()
+  }, [requestAdvance])
 
   if (status === 'loading') {
     return (
@@ -733,27 +518,27 @@ export default function PlayerPage() {
     )
   }
 
-  const showLayerA = activeLayer === 'a'
-
   return (
     <div className="player-root">
-      <MediaLayer
-        item={layerA?.item}
-        visible={showLayerA}
-        isActive={showLayerA}
-        onEnded={handleMediaEnded}
-        onError={handleMediaError}
-        onReady={handleMediaReady}
-      />
+      <div className="player-stage">
+        <MediaLayer
+          layerName="a"
+          item={layers.a}
+          visible={activeLayer === 'a'}
+          onReady={() => handleLayerReady('a')}
+          onError={handleMediaError}
+          onEnded={handleNativeVideoEnded}
+        />
 
-      <MediaLayer
-        item={layerB?.item}
-        visible={!showLayerA}
-        isActive={!showLayerA}
-        onEnded={handleMediaEnded}
-        onError={handleMediaError}
-        onReady={handleMediaReady}
-      />
+        <MediaLayer
+          layerName="b"
+          item={layers.b}
+          visible={activeLayer === 'b'}
+          onReady={() => handleLayerReady('b')}
+          onError={handleMediaError}
+          onEnded={handleNativeVideoEnded}
+        />
+      </div>
     </div>
   )
 }

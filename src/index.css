@@ -119,23 +119,50 @@ body {
   color: white;
   overflow: hidden;
 }
+
 .player-media {
   position: absolute;
   inset: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  animation: playerFade 0.5s ease;
+  will-change: opacity, transform;
 }
-@keyframes playerFade {
-  from { opacity: 0; }
-  to { opacity: 1; }
+
+.player-media-enter {
+  opacity: 1;
+  transform: scale(1);
+  transition: opacity 260ms ease, transform 260ms ease;
 }
-.player-media img, .player-media video, .player-media iframe {
+
+.player-media-leave {
+  opacity: 0;
+  transform: scale(1.01);
+  transition: opacity 220ms ease, transform 220ms ease;
+}
+
+.player-media img,
+.player-media video,
+.player-media iframe {
   max-width: 100%;
   max-height: 100%;
   width: 100%;
   height: 100%;
   object-fit: contain;
   border: none;
+  background: #000;
+}
+
+.player-youtube-shell {
+  width: 100%;
+  height: 100%;
+  background: #000;
+  overflow: hidden;
+}
+
+.player-youtube-shell iframe {
+  width: 100%;
+  height: 100%;
+  border: 0;
+  background: #000;
 }

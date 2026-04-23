@@ -145,21 +145,8 @@ function preloadItem(item) {
   }
 }
 
-function AmbientBackdrop({ posterUrl }) {
-  return (
-    <>
-      <div className="player-ambient-gradient" />
-      {posterUrl ? (
-        <div
-          className="player-ambient-poster"
-          style={{ backgroundImage: `url("${posterUrl}")` }}
-        />
-      ) : null}
-      <div className="player-ambient-overlay" />
-      <div className="player-ambient-noise" />
-      <div className="player-ambient-glow" />
-    </>
-  )
+function AmbientBackdrop() {
+  return <div className="player-static-backdrop" />
 }
 
 function MediaLayer({
@@ -306,18 +293,18 @@ function MediaLayer({
       ref={layerRef}
       className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}
     >
-      <AmbientBackdrop posterUrl={posterUrl} />
+      <AmbientBackdrop />
 
       <div className="player-content-wrap">
         {(item.item_type === 'image' || item.item_type === 'drive_image') && (
-          <img
-            src={item.resolved_url}
-            alt={item.title || ''}
-            className={`player-media-element player-image ${isActive ? 'player-kenburns' : ''}`}
-            onError={onError}
-            draggable="false"
-          />
-        )}
+  <img
+    src={item.resolved_url}
+    alt={item.title || ''}
+    className="player-media-element player-image"
+    onError={onError}
+    draggable="false"
+  />
+)}
 
         {(item.item_type === 'mp4' || item.item_type === 'drive_video') && (
           <video
@@ -356,8 +343,7 @@ function MediaLayer({
         )}
       </div>
 
-      <div className="player-decorative-frame" />
-      <div className="player-decorative-vignette" />
+      
     </div>
   )
 }

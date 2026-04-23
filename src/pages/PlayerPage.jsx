@@ -18,8 +18,20 @@ export default function PlayerPage() {
   const pollTimerRef = useRef(null)
   const videoRef = useRef(null)
 
+  // نخزن أحدث القيم داخل refs حتى لا يقع polling في stale closure
+  const itemsRef = useRef([])
+  const currentIdxRef = useRef(0)
+
+  useEffect(() => {
+    itemsRef.current = items
+  }, [items])
+
+  useEffect(() => {
+    currentIdxRef.current = currentIdx
+  }, [currentIdx])
+
   // --------------------------------------------------------------------------
-  // تحميل البيانات الأولية
+  // تحميل البيانات
   // --------------------------------------------------------------------------
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -28,16 +40,19 @@ export default function PlayerPage() {
         .maybeSingle()
 
       if (screenErr) throw screenErr
+
       if (!screenData) {
         setStatus('error')
         setErrorMsg('الشاشة غير موجودة')
         return
       }
+
       if (!screenData.is_active) {
         setStatus('error')
         setErrorMsg('الشاشة متوقفة حالياً')
         return
       }
+
       if (!screenData.organization_active) {
         setStatus('error')
         setErrorMsg('الجهة غير نشطة')
@@ -68,24 +83,42 @@ export default function PlayerPage() {
         return
       }
 
-      setItems(prevItems => {
-        const nextItems = itemsData || []
+      const nextItems = itemsData
 
-        if (!preserveCurrent || prevItems.length === 0) {
-          setCurrentIdx(0)
-          return nextItems
-        }
+      if (!preserveCurrent) {
+        setItems(nextItems)
+        setCurrentIdx(0)
+        setStatus('ready')
+        return
+      }
 
-        const currentItem = prevItems[currentIdx]
-        if (!currentItem) {
-          setCurrentIdx(0)
-          return nextItems
-        }
+      const prevItems = itemsRef.current
+      const prevIdx = currentIdxRef.current
+      const currentItem = prevItems?.[prevIdx]
 
-        const newIndex = nextItems.findIndex(i => i.id === currentItem.id)
-        setCurrentIdx(newIndex >= 0 ? newIndex : 0)
-        return nextItems
-      })
+      setItems(nextItems)
+
+      if (!currentItem) {
+        setCurrentIdx(prev => {
+          if (nextItems.length === 0) return 0
+          return Math.min(prev, nextItems.length - 1)
+        })
+        setStatus('ready')
+        return
+      }
+
+      const sameItemNewIndex = nextItems.findIndex(i => i.id === currentItem.id)
+
+      if (sameItemNewIndex >= 0) {
+        // نفس العنصر ما زال موجودًا، نحافظ عليه
+        setCurrentIdx(sameItemNewIndex)
+      } else {
+        // العنصر الحالي انحذف، نثبت على أقرب عنصر ممكن
+        setCurrentIdx(prev => {
+          if (nextItems.length === 0) return 0
+          return Math.min(prev, nextItems.length - 1)
+        })
+      }
 
       setStatus('ready')
     } catch (err) {
@@ -93,14 +126,14 @@ export default function PlayerPage() {
       setStatus('error')
       setErrorMsg(err.message || 'حدث خطأ')
     }
-  }, [publicId, navigate, currentIdx])
+  }, [publicId, navigate])
 
   useEffect(() => {
     loadData(false)
   }, [loadData])
 
   // --------------------------------------------------------------------------
-  // Wake Lock — منع شاشة التوقف
+  // Wake Lock
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
@@ -146,28 +179,20 @@ export default function PlayerPage() {
   }, [status])
 
   // --------------------------------------------------------------------------
-  // Polling تلقائي لتحديث القائمة بدون تحديث الصفحة
+  // Polling تلقائي بدون إرجاع للبداية
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
 
-    async function pollLatest() {
-      try {
-        await loadData(true)
-      } catch (e) {
-        console.warn('Polling failed:', e)
-      }
-    }
-
     pollTimerRef.current = setInterval(() => {
-      pollLatest()
+      loadData(true)
     }, 10000)
 
     return () => clearInterval(pollTimerRef.current)
   }, [status, loadData])
 
   // --------------------------------------------------------------------------
-  // إعادة محاولة عند الخطأ كل 30 ثانية
+  // إعادة محاولة عند الخطأ
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'error') return
@@ -176,12 +201,12 @@ export default function PlayerPage() {
   }, [status, loadData])
 
   // --------------------------------------------------------------------------
-  // منطق التقدم بين العناصر
+  // التنقل بين العناصر
   // --------------------------------------------------------------------------
   function goNext() {
     setCurrentIdx(idx => {
-      if (!items.length) return 0
-      return (idx + 1) % items.length
+      if (!itemsRef.current.length) return 0
+      return (idx + 1) % itemsRef.current.length
     })
   }
 
@@ -192,6 +217,7 @@ export default function PlayerPage() {
 
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
+
     const item = items[currentIdx]
     if (!item) return
 
@@ -203,12 +229,12 @@ export default function PlayerPage() {
   }, [currentIdx, status, items])
 
   // --------------------------------------------------------------------------
-  // معالجة أخطاء الوسائط
+  // أخطاء الوسائط
   // --------------------------------------------------------------------------
   function handleMediaError(e) {
     console.warn(
       'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || items?.[currentIdx]?.resolved_url
+      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
     )
     clearTimeout(advanceTimerRef.current)
     advanceTimerRef.current = setTimeout(goNext, 1500)

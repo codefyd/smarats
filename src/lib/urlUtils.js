@@ -2,22 +2,21 @@
 // أدوات اكتشاف نوع الرابط وتحويله للصيغة المناسبة للعرض
 // ============================================================================
 
-// يوتيوب: استخراج معرف الفيديو
 export function extractYouTubeId(url) {
+  const safeUrl = String(url || '')
   const patterns = [
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
     /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/
   ]
 
   for (const p of patterns) {
-    const m = String(url || '').match(p)
+    const m = safeUrl.match(p)
     if (m) return m[1]
   }
 
   return null
 }
 
-// رابط يوتيوب embed نظيف
 export function buildYouTubeEmbedUrl(videoId, loop = false) {
   const params = new URLSearchParams({
     autoplay: '1',
@@ -40,8 +39,12 @@ export function buildYouTubeEmbedUrl(videoId, loop = false) {
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`
 }
 
-// Google Drive: استخراج معرف الملف
+export function buildYouTubeThumbUrl(videoId) {
+  return `https://i.ytimg.com/vi/${videoId}/hqdefault.jpg`
+}
+
 export function extractDriveFileId(url) {
+  const safeUrl = String(url || '')
   const patterns = [
     /\/file\/d\/([a-zA-Z0-9_-]+)/,
     /[?&]id=([a-zA-Z0-9_-]+)/,
@@ -49,7 +52,7 @@ export function extractDriveFileId(url) {
   ]
 
   for (const p of patterns) {
-    const m = String(url || '').match(p)
+    const m = safeUrl.match(p)
     if (m) return m[1]
   }
 
@@ -72,7 +75,6 @@ export function buildDrivePreviewUrl(fileId) {
   return `https://drive.google.com/file/d/${fileId}/preview`
 }
 
-// تحويل رابط درايف لصيغة عرض مباشرة
 export function buildDriveDirectUrl(fileId, isVideo = false) {
   if (isVideo) {
     return buildDriveVideoStreamUrl(fileId)
@@ -81,7 +83,6 @@ export function buildDriveDirectUrl(fileId, isVideo = false) {
   return buildDriveImageUrl(fileId)
 }
 
-// اكتشاف ما إذا كان الرابط فيديو حسب الامتداد أو النوع
 function looksLikeVideo(url) {
   return /\.(mp4|webm|mov|m4v)(\?|$)/i.test(url)
 }
@@ -90,9 +91,6 @@ function looksLikeImage(url) {
   return /\.(jpg|jpeg|png|webp|gif|svg|avif)(\?|$)/i.test(url)
 }
 
-// ============================================================================
-// الدالة الرئيسية
-// ============================================================================
 export function resolveMediaUrl(rawUrl, userHint = null) {
   const url = String(rawUrl || '').trim()
 
@@ -100,14 +98,16 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
     return { type: null, resolvedUrl: '', error: 'رابط فارغ' }
   }
 
-  // يوتيوب
   if (url.includes('youtube.com') || url.includes('youtu.be')) {
     const id = extractYouTubeId(url)
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط يوتيوب غير صالح' }
-    return { type: 'youtube', resolvedUrl: buildYouTubeEmbedUrl(id, false) }
+
+    return {
+      type: 'youtube',
+      resolvedUrl: buildYouTubeEmbedUrl(id, false)
+    }
   }
 
-  // Google Drive
   if (url.includes('drive.google.com') || url.includes('drive.googleusercontent.com')) {
     const id = extractDriveFileId(url)
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط درايف غير صالح' }
@@ -119,7 +119,6 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
     }
   }
 
-  // رابط مباشر
   if (looksLikeVideo(url)) {
     return { type: 'mp4', resolvedUrl: url }
   }
@@ -131,7 +130,6 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
   return { type: 'image', resolvedUrl: url }
 }
 
-// تسمية قابلة للقراءة لنوع العنصر
 export function itemTypeLabel(type) {
   const labels = {
     image: 'صورة',

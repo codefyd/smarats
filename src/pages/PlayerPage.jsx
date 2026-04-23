@@ -5,8 +5,7 @@ import {
   extractYouTubeId,
   extractDriveFileId,
   buildYouTubeEmbedUrl,
-  buildDriveImageUrl,
-  buildDriveVideoUrl
+  buildDriveImageUrl
 } from '../lib/urlUtils'
 
 function arraysEqualByIdentity(a, b) {
@@ -22,27 +21,36 @@ function arraysEqualByIdentity(a, b) {
   return true
 }
 
+function isVideoItem(item) {
+  return item?.item_type === 'mp4' || item?.item_type === 'drive_video'
+}
+
+function getEffectiveDurationSeconds(item) {
+  const seconds = Number(item?.duration_seconds)
+  if (Number.isFinite(seconds) && seconds > 0) {
+    return seconds
+  }
+
+  return null
+}
+
 function normalizePlayableItem(item) {
   if (!item) return item
 
   if (item.item_type === 'drive_video') {
     const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-    if (!fileId) return item
 
     return {
       ...item,
-      resolved_url: buildDriveVideoUrl(fileId),
-      poster_url: buildDriveImageUrl(fileId)
+      resolved_url: item.resolved_url,
+      poster_url: fileId ? buildDriveImageUrl(fileId) : item.poster_url || ''
     }
   }
 
   if (item.item_type === 'drive_image') {
-    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-    if (!fileId) return item
-
     return {
       ...item,
-      resolved_url: buildDriveImageUrl(fileId)
+      resolved_url: item.resolved_url
     }
   }
 
@@ -66,7 +74,12 @@ function preloadItem(item) {
       return
     }
 
-    const safeResolve = () => resolve(true)
+    let settled = false
+    const safeResolve = () => {
+      if (settled) return
+      settled = true
+      resolve(true)
+    }
 
     if (item.item_type === 'image' || item.item_type === 'drive_image') {
       const img = new Image()
@@ -82,11 +95,12 @@ function preloadItem(item) {
       video.muted = true
       video.playsInline = true
       video.oncanplay = safeResolve
+      video.onloadeddata = safeResolve
       video.onerror = safeResolve
       video.src = item.resolved_url
       video.load()
 
-      setTimeout(safeResolve, 1200)
+      setTimeout(safeResolve, 1500)
       return
     }
 
@@ -102,13 +116,13 @@ function preloadItem(item) {
 function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
   useEffect(() => {
     const video = videoRef?.current
-    if (!video) return
+    if (!video || !isVideoItem(item)) return
 
     if (isActive) {
       const playNow = async () => {
         try {
           video.pause()
-          video.currentTime = video.currentTime || 0
+          video.currentTime = 0
           video.muted = true
           video.playsInline = true
           const p = video.play()
@@ -124,9 +138,10 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
     } else {
       try {
         video.pause()
+        video.currentTime = 0
       } catch (_) {}
     }
-  }, [isActive, item?.resolved_url, videoRef])
+  }, [isActive, item, videoRef])
 
   if (!item) return null
 
@@ -137,7 +152,6 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
         alt={item.title || ''}
         onError={onError}
         draggable="false"
-        className={isActive ? 'player-kenburns' : ''}
       />
     )
   }
@@ -154,7 +168,7 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
     )
   }
 
-  if (item.item_type === 'drive_video' || item.item_type === 'mp4') {
+  if (isVideoItem(item)) {
     return (
       <video
         ref={videoRef}
@@ -172,7 +186,6 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
 
   return null
 }
-
 
 export default function PlayerPage() {
   const { publicId } = useParams()
@@ -214,6 +227,7 @@ export default function PlayerPage() {
 
   const clearAdvanceTimer = useCallback(() => {
     clearTimeout(advanceTimerRef.current)
+    advanceTimerRef.current = null
   }, [])
 
   const getCurrentItem = useCallback(() => {
@@ -226,12 +240,39 @@ export default function PlayerPage() {
     return (currentIdxRef.current + 1) % list.length
   }, [])
 
+  const getActiveVideoRef = useCallback(() => {
+    return activeLayerRef.current === 'a' ? videoARef.current : videoBRef.current
+  }, [])
+
+  const stopCurrentVideoPlayback = useCallback(() => {
+    const activeVideo = getActiveVideoRef()
+    if (!activeVideo) return
+
+    try {
+      activeVideo.pause()
+      activeVideo.currentTime = 0
+    } catch (_) {}
+  }, [getActiveVideoRef])
+
   const scheduleAdvance = useCallback((seconds) => {
+    const normalizedSeconds = Number(seconds)
+    if (!Number.isFinite(normalizedSeconds) || normalizedSeconds <= 0) {
+      return false
+    }
+
     clearAdvanceTimer()
     advanceTimerRef.current = setTimeout(() => {
+      const current = getCurrentItem()
+
+      if (isVideoItem(current)) {
+        stopCurrentVideoPlayback()
+      }
+
       goNext()
-    }, Math.max(1, Number(seconds) || 10) * 1000)
-  }, [clearAdvanceTimer])
+    }, normalizedSeconds * 1000)
+
+    return true
+  }, [clearAdvanceTimer, getCurrentItem, stopCurrentVideoPlayback])
 
   const handleMediaError = useCallback((e) => {
     console.warn(
@@ -239,11 +280,15 @@ export default function PlayerPage() {
       e?.target?.currentSrc || e?.target?.src || getCurrentItem()?.resolved_url
     )
 
+    if (isVideoItem(getCurrentItem())) {
+      stopCurrentVideoPlayback()
+    }
+
     clearAdvanceTimer()
     advanceTimerRef.current = setTimeout(() => {
       goNext()
     }, 1200)
-  }, [clearAdvanceTimer, getCurrentItem])
+  }, [clearAdvanceTimer, getCurrentItem, stopCurrentVideoPlayback])
 
   const prepareInactiveLayer = useCallback(async (item) => {
     const normalized = normalizePlayableItem(item)
@@ -279,59 +324,57 @@ export default function PlayerPage() {
     }, 60)
   }, [clearAdvanceTimer, prepareInactiveLayer])
 
-
   const replayCurrentIfSingle = useCallback(() => {
-  const list = itemsRef.current
-  if (list.length !== 1) return false
+    const list = itemsRef.current
+    if (list.length !== 1) return false
 
-  const activeVideo =
-    activeLayerRef.current === 'a'
-      ? videoARef.current
-      : videoBRef.current
+    const activeVideo = getActiveVideoRef()
+    if (!activeVideo) return false
 
-  if (!activeVideo) return false
+    try {
+      activeVideo.pause()
+      activeVideo.currentTime = 0
+      activeVideo.muted = true
+      activeVideo.playsInline = true
 
-  try {
-    activeVideo.pause()
-    activeVideo.currentTime = 0
-    activeVideo.muted = true
-    activeVideo.playsInline = true
+      const promise = activeVideo.play()
+      if (promise?.catch) {
+        promise.catch((err) => console.warn('Replay failed:', err))
+      }
 
-    const promise = activeVideo.play()
-    if (promise?.catch) {
-      promise.catch((err) => console.warn('Replay failed:', err))
+      return true
+    } catch (err) {
+      console.warn('Replay current video failed:', err)
+      return false
+    }
+  }, [getActiveVideoRef])
+
+  const goNext = useCallback(async () => {
+    const list = itemsRef.current
+    if (!list.length) return
+
+    const currentItem = list[currentIdxRef.current]
+
+    if (list.length === 1) {
+      if (isVideoItem(currentItem)) {
+        const replayed = replayCurrentIfSingle()
+        if (replayed) {
+          const limited = getEffectiveDurationSeconds(currentItem)
+          if (limited) {
+            scheduleAdvance(limited)
+          }
+          return
+        }
+      }
+
+      clearAdvanceTimer()
+      scheduleAdvance(getEffectiveDurationSeconds(currentItem) || 10)
+      return
     }
 
-    return true
-  } catch (err) {
-    console.warn('Replay current video failed:', err)
-    return false
-  }
-}, [])
-
- const goNext = useCallback(async () => {
-  const list = itemsRef.current
-  if (!list.length) return
-
-  const currentItem = list[currentIdxRef.current]
-
-  // إذا كان عنصر واحد فقط
-  if (list.length === 1) {
-    if (currentItem?.item_type === 'mp4' || currentItem?.item_type === 'drive_video') {
-      const replayed = replayCurrentIfSingle()
-      if (replayed) return
-    }
-
-    // للصور/يوتيوب: لا تبدل طبقات لنفس العنصر
-    clearAdvanceTimer()
-    scheduleAdvance(currentItem?.duration_seconds || 10)
-    return
-  }
-
-  const nextIndex = getNextIndex()
-  await swapToIndex(nextIndex)
-}, [getNextIndex, swapToIndex, replayCurrentIfSingle, clearAdvanceTimer, scheduleAdvance])
-  
+    const nextIndex = getNextIndex()
+    await swapToIndex(nextIndex)
+  }, [getNextIndex, swapToIndex, replayCurrentIfSingle, clearAdvanceTimer, scheduleAdvance])
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -414,7 +457,7 @@ export default function PlayerPage() {
         return
       }
 
-      const sameItemNewIndex = nextItems.findIndex(i => i.id === currentItem.id)
+      const sameItemNewIndex = nextItems.findIndex((i) => i.id === currentItem.id)
 
       if (sameItemNewIndex >= 0) {
         setCurrentIdx(sameItemNewIndex)
@@ -511,12 +554,16 @@ export default function PlayerPage() {
 
     clearAdvanceTimer()
 
-    if (
-      item.item_type === 'image' ||
-      item.item_type === 'drive_image' ||
-      item.item_type === 'youtube'
-    ) {
-      scheduleAdvance(item.duration_seconds)
+    const hasLimitedDuration = scheduleAdvance(getEffectiveDurationSeconds(item))
+
+    if (!hasLimitedDuration) {
+      if (
+        item.item_type === 'image' ||
+        item.item_type === 'drive_image' ||
+        item.item_type === 'youtube'
+      ) {
+        scheduleAdvance(10)
+      }
     }
 
     const nextIndex = getNextIndex()
@@ -535,25 +582,26 @@ export default function PlayerPage() {
     prepareInactiveLayer
   ])
 
-
   const handleVideoEnded = useCallback(() => {
-  const current = itemsRef.current[currentIdxRef.current]
+    const current = itemsRef.current[currentIdxRef.current]
+    if (!current) {
+      goNext()
+      return
+    }
 
-  if (!current) {
+    const limitedDuration = getEffectiveDurationSeconds(current)
+
+    if (limitedDuration) {
+      return
+    }
+
+    if (isVideoItem(current) && itemsRef.current.length === 1) {
+      replayCurrentIfSingle()
+      return
+    }
+
     goNext()
-    return
-  }
-
-  if (
-    (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
-    itemsRef.current.length === 1
-  ) {
-    replayCurrentIfSingle()
-    return
-  }
-
-  goNext()
-}, [goNext, replayCurrentIfSingle])
+  }, [goNext, replayCurrentIfSingle])
 
   const currentItem = getCurrentItem()
 
@@ -591,28 +639,28 @@ export default function PlayerPage() {
   if (!currentItem) return null
 
   return (
-  <div className="player-root">
-    <div className="player-stage">
-      <div className={`player-layer ${activeLayer === 'a' ? 'is-active' : 'is-next'}`}>
-        <MediaNode
-          item={layerAItem}
-          isActive={activeLayer === 'a'}
-          videoRef={videoARef}
-          onEnded={handleVideoEnded}
-          onError={handleMediaError}
-        />
-      </div>
+    <div className="player-root">
+      <div className="player-stage">
+        <div className={`player-layer ${activeLayer === 'a' ? 'is-active' : 'is-next'}`}>
+          <MediaNode
+            item={layerAItem}
+            isActive={activeLayer === 'a'}
+            videoRef={videoARef}
+            onEnded={handleVideoEnded}
+            onError={handleMediaError}
+          />
+        </div>
 
-      <div className={`player-layer ${activeLayer === 'b' ? 'is-active' : 'is-next'}`}>
-        <MediaNode
-          item={layerBItem}
-          isActive={activeLayer === 'b'}
-          videoRef={videoBRef}
-          onEnded={handleVideoEnded}
-          onError={handleMediaError}
-        />
+        <div className={`player-layer ${activeLayer === 'b' ? 'is-active' : 'is-next'}`}>
+          <MediaNode
+            item={layerBItem}
+            isActive={activeLayer === 'b'}
+            videoRef={videoBRef}
+            onEnded={handleVideoEnded}
+            onError={handleMediaError}
+          />
+        </div>
       </div>
     </div>
-  </div>
-)
+  )
 }

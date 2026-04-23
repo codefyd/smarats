@@ -10,14 +10,14 @@ export function extractYouTubeId(url) {
   ]
 
   for (const p of patterns) {
-    const m = url.match(p)
+    const m = String(url || '').match(p)
     if (m) return m[1]
   }
 
   return null
 }
 
-// تحويل رابط يوتيوب لصيغة embed أنظف
+// رابط يوتيوب embed نظيف
 export function buildYouTubeEmbedUrl(videoId, loop = false) {
   const params = new URLSearchParams({
     autoplay: '1',
@@ -49,20 +49,36 @@ export function extractDriveFileId(url) {
   ]
 
   for (const p of patterns) {
-    const m = url.match(p)
+    const m = String(url || '').match(p)
     if (m) return m[1]
   }
 
   return null
 }
 
+export function buildDriveImageUrl(fileId) {
+  return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
+}
+
+export function buildDriveVideoStreamUrl(fileId) {
+  return `https://drive.googleusercontent.com/uc?id=${fileId}&export=download`
+}
+
+export function buildDriveVideoFallbackStreamUrl(fileId) {
+  return `https://drive.google.com/uc?export=download&id=${fileId}`
+}
+
+export function buildDrivePreviewUrl(fileId) {
+  return `https://drive.google.com/file/d/${fileId}/preview`
+}
+
 // تحويل رابط درايف لصيغة عرض مباشرة
 export function buildDriveDirectUrl(fileId, isVideo = false) {
   if (isVideo) {
-    return `https://drive.google.com/file/d/${fileId}/preview`
+    return buildDriveVideoStreamUrl(fileId)
   }
 
-  return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
+  return buildDriveImageUrl(fileId)
 }
 
 // اكتشاف ما إذا كان الرابط فيديو حسب الامتداد أو النوع
@@ -92,7 +108,7 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
   }
 
   // Google Drive
-  if (url.includes('drive.google.com')) {
+  if (url.includes('drive.google.com') || url.includes('drive.googleusercontent.com')) {
     const id = extractDriveFileId(url)
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط درايف غير صالح' }
 

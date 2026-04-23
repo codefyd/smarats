@@ -3,7 +3,6 @@ import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
   extractYouTubeId,
-  buildYouTubeEmbedUrl,
   buildYouTubeThumbUrl,
   extractDriveFileId,
   buildDriveImageUrl,
@@ -156,7 +155,6 @@ function MediaLayer({
   onEnded,
   onError
 }) {
-  const layerRef = useRef(null)
   const videoRef = useRef(null)
   const youtubeContainerRef = useRef(null)
   const youtubePlayerRef = useRef(null)
@@ -168,6 +166,7 @@ function MediaLayer({
       } catch (_) {}
     }
     youtubePlayerRef.current = null
+
     if (youtubeContainerRef.current) {
       youtubeContainerRef.current.innerHTML = ''
     }
@@ -177,7 +176,6 @@ function MediaLayer({
     return () => cleanupYoutube()
   }, [cleanupYoutube])
 
-  // تشغيل/إيقاف الفيديو العادي بحسب الطبقة النشطة
   useEffect(() => {
     if (!item) return
     if (item.item_type !== 'mp4' && item.item_type !== 'drive_video') return
@@ -203,7 +201,6 @@ function MediaLayer({
     }
   }, [item, isActive, onError])
 
-  // يوتيوب عبر API فقط في الطبقة النشطة
   useEffect(() => {
     if (!item || item.item_type !== 'youtube') {
       cleanupYoutube()
@@ -278,10 +275,7 @@ function MediaLayer({
 
   if (!item) {
     return (
-      <div
-        ref={layerRef}
-        className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}
-      />
+      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`} />
     )
   }
 
@@ -289,22 +283,19 @@ function MediaLayer({
   const videoSources = getVideoSources(item)
 
   return (
-    <div
-      ref={layerRef}
-      className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}
-    >
+    <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
       <AmbientBackdrop />
 
       <div className="player-content-wrap">
         {(item.item_type === 'image' || item.item_type === 'drive_image') && (
-  <img
-    src={item.resolved_url}
-    alt={item.title || ''}
-    className="player-media-element player-image"
-    onError={onError}
-    draggable="false"
-  />
-)}
+          <img
+            src={item.resolved_url}
+            alt={item.title || ''}
+            className="player-media-element player-image"
+            onError={onError}
+            draggable="false"
+          />
+        )}
 
         {(item.item_type === 'mp4' || item.item_type === 'drive_video') && (
           <video
@@ -342,8 +333,6 @@ function MediaLayer({
           </div>
         )}
       </div>
-
-      
     </div>
   )
 }

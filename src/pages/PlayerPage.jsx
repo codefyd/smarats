@@ -107,9 +107,14 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
     if (isActive) {
       const playNow = async () => {
         try {
+          video.pause()
+          video.currentTime = video.currentTime || 0
           video.muted = true
           video.playsInline = true
-          await video.play()
+          const p = video.play()
+          if (p?.catch) {
+            p.catch((err) => console.warn('Video autoplay failed:', err))
+          }
         } catch (err) {
           console.warn('Video autoplay failed:', err)
         }
@@ -119,7 +124,6 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
     } else {
       try {
         video.pause()
-        video.currentTime = 0
       } catch (_) {}
     }
   }, [isActive, item?.resolved_url, videoRef])
@@ -168,6 +172,8 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
 
   return null
 }
+
+
 export default function PlayerPage() {
   const { publicId } = useParams()
   const navigate = useNavigate()
@@ -288,10 +294,14 @@ export default function PlayerPage() {
   try {
     activeVideo.pause()
     activeVideo.currentTime = 0
+    activeVideo.muted = true
+    activeVideo.playsInline = true
+
     const promise = activeVideo.play()
     if (promise?.catch) {
       promise.catch((err) => console.warn('Replay failed:', err))
     }
+
     return true
   } catch (err) {
     console.warn('Replay current video failed:', err)
@@ -525,6 +535,26 @@ export default function PlayerPage() {
     prepareInactiveLayer
   ])
 
+
+  const handleVideoEnded = useCallback(() => {
+  const current = itemsRef.current[currentIdxRef.current]
+
+  if (!current) {
+    goNext()
+    return
+  }
+
+  if (
+    (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
+    itemsRef.current.length === 1
+  ) {
+    replayCurrentIfSingle()
+    return
+  }
+
+  goNext()
+}, [goNext, replayCurrentIfSingle])
+
   const currentItem = getCurrentItem()
 
   if (status === 'loading') {
@@ -568,24 +598,7 @@ export default function PlayerPage() {
           item={layerAItem}
           isActive={activeLayer === 'a'}
           videoRef={videoARef}
-          onEnded={() => {
-            const current = itemsRef.current[currentIdxRef.current]
-
-            if (!current) {
-              goNext()
-              return
-            }
-
-            if (
-              (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
-              itemsRef.current.length === 1
-            ) {
-              replayCurrentIfSingle()
-              return
-            }
-
-            goNext()
-          }}
+          onEnded={handleVideoEnded}
           onError={handleMediaError}
         />
       </div>
@@ -595,27 +608,11 @@ export default function PlayerPage() {
           item={layerBItem}
           isActive={activeLayer === 'b'}
           videoRef={videoBRef}
-          onEnded={() => {
-            const current = itemsRef.current[currentIdxRef.current]
-
-            if (!current) {
-              goNext()
-              return
-            }
-
-            if (
-              (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
-              itemsRef.current.length === 1
-            ) {
-              replayCurrentIfSingle()
-              return
-            }
-
-            goNext()
-          }}
+          onEnded={handleVideoEnded}
           onError={handleMediaError}
         />
       </div>
     </div>
   </div>
 )
+}

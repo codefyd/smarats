@@ -100,6 +100,30 @@ function preloadItem(item) {
 }
 
 function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
+  useEffect(() => {
+    const video = videoRef?.current
+    if (!video) return
+
+    if (isActive) {
+      const playNow = async () => {
+        try {
+          video.muted = true
+          video.playsInline = true
+          await video.play()
+        } catch (err) {
+          console.warn('Video autoplay failed:', err)
+        }
+      }
+
+      playNow()
+    } else {
+      try {
+        video.pause()
+        video.currentTime = 0
+      } catch (_) {}
+    }
+  }, [isActive, item?.resolved_url, videoRef])
+
   if (!item) return null
 
   if (item.item_type === 'image' || item.item_type === 'drive_image') {
@@ -132,7 +156,6 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
         ref={videoRef}
         src={item.resolved_url}
         poster={item.poster_url}
-        autoPlay={isActive}
         muted
         playsInline
         preload="auto"
@@ -145,7 +168,6 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
 
   return null
 }
-
 export default function PlayerPage() {
   const { publicId } = useParams()
   const navigate = useNavigate()
@@ -251,13 +273,55 @@ export default function PlayerPage() {
     }, 60)
   }, [clearAdvanceTimer, prepareInactiveLayer])
 
-  const goNext = useCallback(async () => {
-    const list = itemsRef.current
-    if (!list.length) return
 
-    const nextIndex = getNextIndex()
-    await swapToIndex(nextIndex)
-  }, [getNextIndex, swapToIndex])
+  const replayCurrentIfSingle = useCallback(() => {
+  const list = itemsRef.current
+  if (list.length !== 1) return false
+
+  const activeVideo =
+    activeLayerRef.current === 'a'
+      ? videoARef.current
+      : videoBRef.current
+
+  if (!activeVideo) return false
+
+  try {
+    activeVideo.pause()
+    activeVideo.currentTime = 0
+    const promise = activeVideo.play()
+    if (promise?.catch) {
+      promise.catch((err) => console.warn('Replay failed:', err))
+    }
+    return true
+  } catch (err) {
+    console.warn('Replay current video failed:', err)
+    return false
+  }
+}, [])
+
+ const goNext = useCallback(async () => {
+  const list = itemsRef.current
+  if (!list.length) return
+
+  const currentItem = list[currentIdxRef.current]
+
+  // إذا كان عنصر واحد فقط
+  if (list.length === 1) {
+    if (currentItem?.item_type === 'mp4' || currentItem?.item_type === 'drive_video') {
+      const replayed = replayCurrentIfSingle()
+      if (replayed) return
+    }
+
+    // للصور/يوتيوب: لا تبدل طبقات لنفس العنصر
+    clearAdvanceTimer()
+    scheduleAdvance(currentItem?.duration_seconds || 10)
+    return
+  }
+
+  const nextIndex = getNextIndex()
+  await swapToIndex(nextIndex)
+}, [getNextIndex, swapToIndex, replayCurrentIfSingle, clearAdvanceTimer, scheduleAdvance])
+  
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -497,28 +561,61 @@ export default function PlayerPage() {
   if (!currentItem) return null
 
   return (
-    <div className="player-root">
-      <div className="player-stage">
-        <div className={`player-layer ${activeLayer === 'a' ? 'is-active' : 'is-next'}`}>
-          <MediaNode
-            item={layerAItem}
-            isActive={activeLayer === 'a'}
-            videoRef={videoARef}
-            onEnded={goNext}
-            onError={handleMediaError}
-          />
-        </div>
+  <div className="player-root">
+    <div className="player-stage">
+      <div className={`player-layer ${activeLayer === 'a' ? 'is-active' : 'is-next'}`}>
+        <MediaNode
+          item={layerAItem}
+          isActive={activeLayer === 'a'}
+          videoRef={videoARef}
+          onEnded={() => {
+            const current = itemsRef.current[currentIdxRef.current]
 
-        <div className={`player-layer ${activeLayer === 'b' ? 'is-active' : 'is-next'}`}>
-          <MediaNode
-            item={layerBItem}
-            isActive={activeLayer === 'b'}
-            videoRef={videoBRef}
-            onEnded={goNext}
-            onError={handleMediaError}
-          />
-        </div>
+            if (!current) {
+              goNext()
+              return
+            }
+
+            if (
+              (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
+              itemsRef.current.length === 1
+            ) {
+              replayCurrentIfSingle()
+              return
+            }
+
+            goNext()
+          }}
+          onError={handleMediaError}
+        />
+      </div>
+
+      <div className={`player-layer ${activeLayer === 'b' ? 'is-active' : 'is-next'}`}>
+        <MediaNode
+          item={layerBItem}
+          isActive={activeLayer === 'b'}
+          videoRef={videoBRef}
+          onEnded={() => {
+            const current = itemsRef.current[currentIdxRef.current]
+
+            if (!current) {
+              goNext()
+              return
+            }
+
+            if (
+              (current.item_type === 'mp4' || current.item_type === 'drive_video') &&
+              itemsRef.current.length === 1
+            ) {
+              replayCurrentIfSingle()
+              return
+            }
+
+            goNext()
+          }}
+          onError={handleMediaError}
+        />
       </div>
     </div>
-  )
-}
+  </div>
+)

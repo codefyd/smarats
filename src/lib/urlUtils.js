@@ -35,8 +35,7 @@ export function extractDriveFileId(url) {
   const patterns = [
     /\/file\/d\/([a-zA-Z0-9_-]+)/,
     /[?&]id=([a-zA-Z0-9_-]+)/,
-    /\/open\?id=([a-zA-Z0-9_-]+)/,
-    /\/d\/([a-zA-Z0-9_-]{25,})/
+    /\/open\?id=([a-zA-Z0-9_-]+)/
   ]
   for (const p of patterns) {
     const m = url.match(p)
@@ -45,31 +44,15 @@ export function extractDriveFileId(url) {
   return null
 }
 
-// ============================================================================
 // تحويل رابط درايف لصيغة عرض مباشرة
-// ============================================================================
-// ملاحظة: Google أوقفت دعم uc?export=view لصور كثيرة منذ 2023-2024
-// الحل الأفضل:
-//   - للصور: استخدام thumbnail بدقة عالية (موثوق 100%) أو lh3.googleusercontent.com
-//   - للفيديو: استخدام /preview (يعمل داخل iframe فقط)
-//
-// شرط لازم: الملف يجب أن يكون مشاركاً بصيغة "Anyone with the link"
-// ============================================================================
+export function buildDriveDirectUrl(fileId, isVideo = false) {
+  if (isVideo) {
+    // للفيديو نستخدم preview
+    return `https://drive.google.com/file/d/${fileId}/preview`
+  }
 
-export function buildDriveImageUrl(fileId) {
-  // thumbnail API — موثوق جداً وبدقة عالية (sz=w2000 = عرض 2000 بكسل)
-  // يعمل حتى لو uc?export=view فشل
+  // للصور هذه الصيغة غالباً أكثر استقراراً من uc?export=view
   return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
-}
-
-export function buildDriveVideoUrl(fileId) {
-  // /preview يعمل داخل iframe فقط، مع autoplay
-  return `https://drive.google.com/file/d/${fileId}/preview?autoplay=1`
-}
-
-// للرجوع إلى uc?export كخطة بديلة
-export function buildDriveFallbackImageUrl(fileId) {
-  return `https://drive.google.com/uc?export=view&id=${fileId}`
 }
 
 // اكتشاف ما إذا كان الرابط فيديو حسب الامتداد أو النوع
@@ -104,23 +87,10 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط درايف غير صالح' }
 
     const isVideo = userHint === 'video'
-    if (isVideo) {
-      return {
-        type: 'drive_video',
-        resolvedUrl: buildDriveVideoUrl(id),
-        driveFileId: id
-      }
-    }
     return {
-      type: 'drive_image',
-      resolvedUrl: buildDriveImageUrl(id),
-      driveFileId: id
+      type: isVideo ? 'drive_video' : 'drive_image',
+      resolvedUrl: buildDriveDirectUrl(id, isVideo)
     }
-  }
-
-  // لمضيف صور Google (lh3.googleusercontent.com)
-  if (url.includes('googleusercontent.com')) {
-    return { type: 'image', resolvedUrl: url }
   }
 
   // رابط مباشر

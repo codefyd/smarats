@@ -1,26 +1,63 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { extractYouTubeId, buildYouTubeEmbedUrl } from '../lib/urlUtils'
+
+let youtubeApiPromise = null
+
+function loadYouTubeApi() {
+  if (window.YT?.Player) return Promise.resolve(window.YT)
+
+  if (youtubeApiPromise) return youtubeApiPromise
+
+  youtubeApiPromise = new Promise((resolve) => {
+    const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]')
+    if (!existingScript) {
+      const tag = document.createElement('script')
+      tag.src = 'https://www.youtube.com/iframe_api'
+      document.body.appendChild(tag)
+    }
+
+    const prev = window.onYouTubeIframeAPIReady
+    window.onYouTubeIframeAPIReady = () => {
+      prev?.()
+      resolve(window.YT)
+    }
+
+    const checkReady = setInterval(() => {
+      if (window.YT?.Player) {
+        clearInterval(checkReady)
+        resolve(window.YT)
+      }
+    }, 200)
+  })
+
+  return youtubeApiPromise
+}
 
 export default function PlayerPage() {
   const { publicId } = useParams()
   const navigate = useNavigate()
 
-  const [status, setStatus] = useState('loading') // loading | error | ready
+  const [status, setStatus] = useState('loading')
   const [errorMsg, setErrorMsg] = useState('')
   const [screen, setScreen] = useState(null)
   const [items, setItems] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
+  const [isVisible, setIsVisible] = useState(true)
 
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
   const pollTimerRef = useRef(null)
-  const videoRef = useRef(null)
+  const preloadRef = useRef({ image: null, video: null })
 
-  // نخزن أحدث القيم داخل refs حتى لا يقع polling في stale closure
   const itemsRef = useRef([])
   const currentIdxRef = useRef(0)
+  const transitionLockRef = useRef(false)
+
+  const youtubeIframeRef = useRef(null)
+  const youtubePlayerRef = useRef(null)
 
   useEffect(() => {
     itemsRef.current = items
@@ -30,9 +67,30 @@ export default function PlayerPage() {
     currentIdxRef.current = currentIdx
   }, [currentIdx])
 
-  // --------------------------------------------------------------------------
-  // تحميل البيانات
-  // --------------------------------------------------------------------------
+  const animateNext = useCallback((nextFn) => {
+    if (transitionLockRef.current) return
+    transitionLockRef.current = true
+    setIsVisible(false)
+
+    setTimeout(() => {
+      nextFn()
+      setTimeout(() => {
+        setIsVisible(true)
+        transitionLockRef.current = false
+      }, 60)
+    }, 220)
+  }, [])
+
+  const goNext = useCallback(() => {
+    animateNext(() => {
+      setCurrentIdx((idx) => {
+        const list = itemsRef.current
+        if (!list.length) return 0
+        return (idx + 1) % list.length
+      })
+    })
+  }, [animateNext])
+
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
       const { data: screenData, error: screenErr } = await supabase
@@ -99,25 +157,17 @@ export default function PlayerPage() {
       setItems(nextItems)
 
       if (!currentItem) {
-        setCurrentIdx(prev => {
-          if (nextItems.length === 0) return 0
-          return Math.min(prev, nextItems.length - 1)
-        })
+        setCurrentIdx((prev) => Math.min(prev, Math.max(nextItems.length - 1, 0)))
         setStatus('ready')
         return
       }
 
-      const sameItemNewIndex = nextItems.findIndex(i => i.id === currentItem.id)
+      const sameItemNewIndex = nextItems.findIndex((i) => i.id === currentItem.id)
 
       if (sameItemNewIndex >= 0) {
-        // نفس العنصر ما زال موجودًا، نحافظ عليه
         setCurrentIdx(sameItemNewIndex)
       } else {
-        // العنصر الحالي انحذف، نثبت على أقرب عنصر ممكن
-        setCurrentIdx(prev => {
-          if (nextItems.length === 0) return 0
-          return Math.min(prev, nextItems.length - 1)
-        })
+        setCurrentIdx((prev) => Math.min(prev, Math.max(nextItems.length - 1, 0)))
       }
 
       setStatus('ready')
@@ -132,9 +182,6 @@ export default function PlayerPage() {
     loadData(false)
   }, [loadData])
 
-  // --------------------------------------------------------------------------
-  // Wake Lock
-  // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -165,9 +212,6 @@ export default function PlayerPage() {
     }
   }, [status])
 
-  // --------------------------------------------------------------------------
-  // إعادة تحميل كاملة كل ساعة
-  // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -178,9 +222,6 @@ export default function PlayerPage() {
     return () => clearTimeout(reloadTimerRef.current)
   }, [status])
 
-  // --------------------------------------------------------------------------
-  // Polling تلقائي بدون إرجاع للبداية
-  // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -191,54 +232,163 @@ export default function PlayerPage() {
     return () => clearInterval(pollTimerRef.current)
   }, [status, loadData])
 
-  // --------------------------------------------------------------------------
-  // إعادة محاولة عند الخطأ
-  // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'error') return
     const t = setTimeout(() => loadData(false), 30000)
     return () => clearTimeout(t)
   }, [status, loadData])
 
-  // --------------------------------------------------------------------------
-  // التنقل بين العناصر
-  // --------------------------------------------------------------------------
-  function goNext() {
-    setCurrentIdx(idx => {
-      if (!itemsRef.current.length) return 0
-      return (idx + 1) % itemsRef.current.length
-    })
-  }
-
   function scheduleAdvance(seconds) {
     clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(goNext, seconds * 1000)
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, Math.max(1, seconds) * 1000)
   }
 
+  function handleMediaError(e) {
+    console.warn(
+      'Media failed, skipping to next:',
+      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
+    )
+
+    clearTimeout(advanceTimerRef.current)
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, 1200)
+  }
+
+  // preload للعنصر القادم
+  useEffect(() => {
+    if (status !== 'ready' || items.length === 0) return
+
+    const nextIndex = (currentIdx + 1) % items.length
+    const nextItem = items[nextIndex]
+    if (!nextItem) return
+
+    if (nextItem.item_type === 'image' || nextItem.item_type === 'drive_image') {
+      const img = new Image()
+      img.src = nextItem.resolved_url
+      preloadRef.current.image = img
+    }
+
+    if (nextItem.item_type === 'mp4') {
+      const v = document.createElement('video')
+      v.src = nextItem.resolved_url
+      v.preload = 'auto'
+      v.muted = true
+      v.playsInline = true
+      preloadRef.current.video = v
+    }
+  }, [currentIdx, items, status])
+
+  // تنظيم الصور / الفيديو المباشر / فيديو درايف
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
 
     const item = items[currentIdx]
     if (!item) return
 
-    if (item.item_type !== 'mp4') {
+    clearTimeout(advanceTimerRef.current)
+
+    if (
+      item.item_type === 'image' ||
+      item.item_type === 'drive_image' ||
+      item.item_type === 'drive_video'
+    ) {
       scheduleAdvance(item.duration_seconds)
     }
 
     return () => clearTimeout(advanceTimerRef.current)
-  }, [currentIdx, status, items])
+  }, [currentIdx, items, status, goNext])
 
-  // --------------------------------------------------------------------------
-  // أخطاء الوسائط
-  // --------------------------------------------------------------------------
-  function handleMediaError(e) {
-    console.warn(
-      'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
-    )
+  // تشغيل يوتيوب عبر API والانتقال التلقائي بعد النهاية
+  useEffect(() => {
+    if (status !== 'ready' || items.length === 0) return
+
+    const item = items[currentIdx]
+    if (!item || item.item_type !== 'youtube') {
+      if (youtubePlayerRef.current?.destroy) {
+        youtubePlayerRef.current.destroy()
+        youtubePlayerRef.current = null
+      }
+      return
+    }
+
+    let cancelled = false
     clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(goNext, 1500)
-  }
+
+    const videoId = extractYouTubeId(item.original_url || item.resolved_url)
+    if (!videoId) {
+      handleMediaError()
+      return
+    }
+
+    const singleItemLoop = items.length === 1
+
+    async function setupYoutube() {
+      try {
+        await loadYouTubeApi()
+        if (cancelled || !youtubeIframeRef.current) return
+
+        youtubePlayerRef.current?.destroy?.()
+
+        youtubePlayerRef.current = new window.YT.Player(youtubeIframeRef.current, {
+          videoId,
+          playerVars: {
+            autoplay: 1,
+            controls: 0,
+            rel: 0,
+            modestbranding: 1,
+            playsinline: 1,
+            mute: 1,
+            fs: 0,
+            iv_load_policy: 3,
+            disablekb: 1,
+            loop: singleItemLoop ? 1 : 0,
+            playlist: singleItemLoop ? videoId : undefined
+          },
+          events: {
+            onReady: (event) => {
+              try {
+                event.target.mute()
+                event.target.playVideo()
+              } catch (_) {}
+            },
+            onStateChange: (event) => {
+              if (cancelled) return
+
+              if (event.data === window.YT.PlayerState.ENDED) {
+                if (itemsRef.current.length <= 1) {
+                  try {
+                    event.target.seekTo(0)
+                    event.target.playVideo()
+                  } catch (_) {}
+                } else {
+                  goNext()
+                }
+              }
+
+              if (event.data === window.YT.PlayerState.UNSTARTED) {
+                scheduleAdvance(item.duration_seconds || 30)
+              }
+            },
+            onError: () => {
+              handleMediaError()
+            }
+          }
+        })
+      } catch (e) {
+        console.warn('YouTube API setup failed:', e)
+        scheduleAdvance(item.duration_seconds || 30)
+      }
+    }
+
+    setupYoutube()
+
+    return () => {
+      cancelled = true
+    }
+  }, [currentIdx, items, status, goNext])
 
   if (status === 'loading') {
     return (
@@ -274,25 +424,42 @@ export default function PlayerPage() {
   const item = items[currentIdx]
   if (!item) return null
 
+  const youtubeVideoId =
+    item.item_type === 'youtube'
+      ? extractYouTubeId(item.original_url || item.resolved_url)
+      : null
+
+  const cleanYoutubeSrc =
+    youtubeVideoId
+      ? buildYouTubeEmbedUrl(youtubeVideoId, items.length === 1)
+      : null
+
   return (
     <div className="player-root">
-      <div key={item.id} className="player-media">
+      <div
+        key={item.id}
+        className={`player-media ${isVisible ? 'player-media-enter' : 'player-media-leave'}`}
+      >
         {(item.item_type === 'image' || item.item_type === 'drive_image') && (
           <img
             src={item.resolved_url}
             alt={item.title || ''}
             onError={handleMediaError}
+            draggable="false"
           />
         )}
 
         {item.item_type === 'youtube' && (
-          <iframe
-            src={item.resolved_url}
-            title={item.title || 'YouTube'}
-            allow="autoplay; encrypted-media"
-            allowFullScreen
-            onError={handleMediaError}
-          />
+          <div className="player-youtube-shell">
+            <iframe
+              ref={youtubeIframeRef}
+              src={cleanYoutubeSrc}
+              title={item.title || 'YouTube'}
+              allow="autoplay; encrypted-media"
+              allowFullScreen={false}
+              onError={handleMediaError}
+            />
+          </div>
         )}
 
         {item.item_type === 'drive_video' && (
@@ -307,11 +474,11 @@ export default function PlayerPage() {
 
         {item.item_type === 'mp4' && (
           <video
-            ref={videoRef}
             src={item.resolved_url}
             autoPlay
             muted
             playsInline
+            preload="auto"
             onEnded={goNext}
             onError={handleMediaError}
           />

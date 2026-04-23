@@ -35,7 +35,8 @@ export function extractDriveFileId(url) {
   const patterns = [
     /\/file\/d\/([a-zA-Z0-9_-]+)/,
     /[?&]id=([a-zA-Z0-9_-]+)/,
-    /\/open\?id=([a-zA-Z0-9_-]+)/
+    /\/open\?id=([a-zA-Z0-9_-]+)/,
+    /\/d\/([a-zA-Z0-9_-]{25,})/
   ]
   for (const p of patterns) {
     const m = url.match(p)
@@ -44,12 +45,30 @@ export function extractDriveFileId(url) {
   return null
 }
 
+// ============================================================================
 // تحويل رابط درايف لصيغة عرض مباشرة
-export function buildDriveDirectUrl(fileId, isVideo = false) {
-  if (isVideo) {
-    // للفيديو نستخدم preview (أكثر موثوقية من uc?export=download)
-    return `https://drive.google.com/file/d/${fileId}/preview`
-  }
+// ============================================================================
+// ملاحظة: Google أوقفت دعم uc?export=view لصور كثيرة منذ 2023-2024
+// الحل الأفضل:
+//   - للصور: استخدام thumbnail بدقة عالية (موثوق 100%) أو lh3.googleusercontent.com
+//   - للفيديو: استخدام /preview (يعمل داخل iframe فقط)
+//
+// شرط لازم: الملف يجب أن يكون مشاركاً بصيغة "Anyone with the link"
+// ============================================================================
+
+export function buildDriveImageUrl(fileId) {
+  // thumbnail API — موثوق جداً وبدقة عالية (sz=w2000 = عرض 2000 بكسل)
+  // يعمل حتى لو uc?export=view فشل
+  return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
+}
+
+export function buildDriveVideoUrl(fileId) {
+  // /preview يعمل داخل iframe فقط، مع autoplay
+  return `https://drive.google.com/file/d/${fileId}/preview?autoplay=1`
+}
+
+// للرجوع إلى uc?export كخطة بديلة
+export function buildDriveFallbackImageUrl(fileId) {
   return `https://drive.google.com/uc?export=view&id=${fileId}`
 }
 
@@ -83,12 +102,25 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
   if (url.includes('drive.google.com')) {
     const id = extractDriveFileId(url)
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط درايف غير صالح' }
-    // userHint يسمح للمستخدم بتحديد ما إذا كان فيديو أو صورة
+
     const isVideo = userHint === 'video'
-    return {
-      type: isVideo ? 'drive_video' : 'drive_image',
-      resolvedUrl: buildDriveDirectUrl(id, isVideo)
+    if (isVideo) {
+      return {
+        type: 'drive_video',
+        resolvedUrl: buildDriveVideoUrl(id),
+        driveFileId: id
+      }
     }
+    return {
+      type: 'drive_image',
+      resolvedUrl: buildDriveImageUrl(id),
+      driveFileId: id
+    }
+  }
+
+  // لمضيف صور Google (lh3.googleusercontent.com)
+  if (url.includes('googleusercontent.com')) {
+    return { type: 'image', resolvedUrl: url }
   }
 
   // رابط مباشر
@@ -99,7 +131,7 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
     return { type: 'image', resolvedUrl: url }
   }
 
-  // افتراضياً نحسبه صورة (معظم الروابط المختصرة تشير لصور)
+  // افتراضياً نحسبه صورة
   return { type: 'image', resolvedUrl: url }
 }
 

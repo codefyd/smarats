@@ -47,11 +47,10 @@ export function extractDriveFileId(url) {
 // تحويل رابط درايف لصيغة عرض مباشرة
 export function buildDriveDirectUrl(fileId, isVideo = false) {
   if (isVideo) {
-    // للفيديو نستخدم preview
     return `https://drive.google.com/file/d/${fileId}/preview`
   }
 
-  // للصور هذه الصيغة غالباً أكثر استقراراً من uc?export=view
+  // للصور: thumbnail أكثر استقراراً من uc?export=view
   return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
 }
 

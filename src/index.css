@@ -124,26 +124,19 @@ body {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  will-change: opacity, transform;
-  transform-origin: center center;
+  will-change: opacity;
   backface-visibility: hidden;
 }
 
 .player-layer-visible {
   opacity: 1;
-  transform: scale(1);
-  transition:
-    opacity 420ms ease,
-    transform 420ms ease;
+  transition: opacity 420ms ease;
   z-index: 3;
 }
 
 .player-layer-hidden {
   opacity: 0;
-  transform: scale(1.008);
-  transition:
-    opacity 320ms ease,
-    transform 320ms ease;
+  transition: opacity 320ms ease;
   z-index: 2;
   pointer-events: none;
 }

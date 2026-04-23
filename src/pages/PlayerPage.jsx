@@ -1,18 +1,24 @@
 import { useEffect, useRef, useState, useCallback } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
-import { extractYouTubeId, buildYouTubeEmbedUrl } from '../lib/urlUtils'
+import {
+  extractYouTubeId,
+  extractDriveFileId,
+  buildDriveVideoStreamUrl,
+  buildDriveVideoFallbackStreamUrl,
+  buildDriveImageUrl
+} from '../lib/urlUtils'
 
 let youtubeApiPromise = null
 
 function loadYouTubeApi() {
   if (window.YT?.Player) return Promise.resolve(window.YT)
-
   if (youtubeApiPromise) return youtubeApiPromise
 
   youtubeApiPromise = new Promise((resolve) => {
-    const existingScript = document.querySelector('script[src="https://www.youtube.com/iframe_api"]')
-    if (!existingScript) {
+    const existing = document.querySelector('script[src="https://www.youtube.com/iframe_api"]')
+
+    if (!existing) {
       const tag = document.createElement('script')
       tag.src = 'https://www.youtube.com/iframe_api'
       document.body.appendChild(tag)
@@ -24,15 +30,26 @@ function loadYouTubeApi() {
       resolve(window.YT)
     }
 
-    const checkReady = setInterval(() => {
+    const timer = setInterval(() => {
       if (window.YT?.Player) {
-        clearInterval(checkReady)
+        clearInterval(timer)
         resolve(window.YT)
       }
     }, 200)
   })
 
   return youtubeApiPromise
+}
+
+function arraysEqualByIdentity(a, b) {
+  if (a.length !== b.length) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]?.id !== b[i]?.id) return false
+    if (a[i]?.resolved_url !== b[i]?.resolved_url) return false
+    if (a[i]?.duration_seconds !== b[i]?.duration_seconds) return false
+    if (a[i]?.order_index !== b[i]?.order_index) return false
+  }
+  return true
 }
 
 export default function PlayerPage() {
@@ -50,13 +67,15 @@ export default function PlayerPage() {
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
   const pollTimerRef = useRef(null)
-  const preloadRef = useRef({ image: null, video: null })
 
   const itemsRef = useRef([])
   const currentIdxRef = useRef(0)
   const transitionLockRef = useRef(false)
 
-  const youtubeIframeRef = useRef(null)
+  const activeVideoRef = useRef(null)
+  const preloadVideoRef = useRef(null)
+
+  const youtubeContainerRef = useRef(null)
   const youtubePlayerRef = useRef(null)
 
   useEffect(() => {
@@ -67,13 +86,23 @@ export default function PlayerPage() {
     currentIdxRef.current = currentIdx
   }, [currentIdx])
 
-  const animateNext = useCallback((nextFn) => {
+  const cleanupYoutubePlayer = useCallback(() => {
+    if (youtubePlayerRef.current?.destroy) {
+      try {
+        youtubePlayerRef.current.destroy()
+      } catch (_) {}
+    }
+    youtubePlayerRef.current = null
+  }, [])
+
+  const animateToIndex = useCallback((targetIndex) => {
     if (transitionLockRef.current) return
     transitionLockRef.current = true
+
     setIsVisible(false)
 
     setTimeout(() => {
-      nextFn()
+      setCurrentIdx(targetIndex)
       setTimeout(() => {
         setIsVisible(true)
         transitionLockRef.current = false
@@ -82,14 +111,61 @@ export default function PlayerPage() {
   }, [])
 
   const goNext = useCallback(() => {
-    animateNext(() => {
-      setCurrentIdx((idx) => {
-        const list = itemsRef.current
-        if (!list.length) return 0
-        return (idx + 1) % list.length
-      })
-    })
-  }, [animateNext])
+    const list = itemsRef.current
+    if (!list.length) return
+
+    const nextIndex = (currentIdxRef.current + 1) % list.length
+    animateToIndex(nextIndex)
+  }, [animateToIndex])
+
+  const replayCurrentVideoIfSingle = useCallback(() => {
+    const list = itemsRef.current
+    if (list.length !== 1) return false
+
+    const video = activeVideoRef.current
+    if (!video) return false
+
+    try {
+      video.currentTime = 0
+      const p = video.play()
+      if (p?.catch) p.catch(() => {})
+      return true
+    } catch (_) {
+      return false
+    }
+  }, [])
+
+  const handleVideoEnded = useCallback(() => {
+    if (itemsRef.current.length <= 1) {
+      if (!replayCurrentVideoIfSingle()) {
+        goNext()
+      }
+      return
+    }
+
+    goNext()
+  }, [goNext, replayCurrentVideoIfSingle])
+
+  const scheduleAdvance = useCallback((seconds) => {
+    clearTimeout(advanceTimerRef.current)
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, Math.max(1, Number(seconds) || 10) * 1000)
+  }, [goNext])
+
+  const handleMediaError = useCallback((e) => {
+    console.warn(
+      'Media failed, skipping to next:',
+      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
+    )
+
+    clearTimeout(advanceTimerRef.current)
+    cleanupYoutubePlayer()
+
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, 1200)
+  }, [cleanupYoutubePlayer, goNext])
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -153,6 +229,11 @@ export default function PlayerPage() {
       const prevItems = itemsRef.current
       const prevIdx = currentIdxRef.current
       const currentItem = prevItems?.[prevIdx]
+
+      if (arraysEqualByIdentity(prevItems, nextItems)) {
+        setStatus('ready')
+        return
+      }
 
       setItems(nextItems)
 
@@ -238,25 +319,6 @@ export default function PlayerPage() {
     return () => clearTimeout(t)
   }, [status, loadData])
 
-  function scheduleAdvance(seconds) {
-    clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(() => {
-      goNext()
-    }, Math.max(1, seconds) * 1000)
-  }
-
-  function handleMediaError(e) {
-    console.warn(
-      'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
-    )
-
-    clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(() => {
-      goNext()
-    }, 1200)
-  }
-
   // preload للعنصر القادم
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
@@ -268,20 +330,29 @@ export default function PlayerPage() {
     if (nextItem.item_type === 'image' || nextItem.item_type === 'drive_image') {
       const img = new Image()
       img.src = nextItem.resolved_url
-      preloadRef.current.image = img
     }
 
     if (nextItem.item_type === 'mp4') {
-      const v = document.createElement('video')
-      v.src = nextItem.resolved_url
-      v.preload = 'auto'
-      v.muted = true
-      v.playsInline = true
-      preloadRef.current.video = v
+      const video = preloadVideoRef.current
+      if (video) {
+        video.src = nextItem.resolved_url
+        video.load()
+      }
+    }
+
+    if (nextItem.item_type === 'drive_video') {
+      const fileId = extractDriveFileId(nextItem.original_url || nextItem.resolved_url)
+      const primary = fileId ? buildDriveVideoStreamUrl(fileId) : nextItem.resolved_url
+
+      const video = preloadVideoRef.current
+      if (video) {
+        video.src = primary
+        video.load()
+      }
     }
   }, [currentIdx, items, status])
 
-  // تنظيم الصور / الفيديو المباشر / فيديو درايف
+  // الصور فقط: مؤقت
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
 
@@ -289,28 +360,22 @@ export default function PlayerPage() {
     if (!item) return
 
     clearTimeout(advanceTimerRef.current)
+    cleanupYoutubePlayer()
 
-    if (
-      item.item_type === 'image' ||
-      item.item_type === 'drive_image' ||
-      item.item_type === 'drive_video'
-    ) {
+    if (item.item_type === 'image' || item.item_type === 'drive_image') {
       scheduleAdvance(item.duration_seconds)
     }
 
     return () => clearTimeout(advanceTimerRef.current)
-  }, [currentIdx, items, status, goNext])
+  }, [currentIdx, items, status, scheduleAdvance, cleanupYoutubePlayer])
 
-  // تشغيل يوتيوب عبر API والانتقال التلقائي بعد النهاية
+  // يوتيوب عبر API
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
 
     const item = items[currentIdx]
     if (!item || item.item_type !== 'youtube') {
-      if (youtubePlayerRef.current?.destroy) {
-        youtubePlayerRef.current.destroy()
-        youtubePlayerRef.current = null
-      }
+      cleanupYoutubePlayer()
       return
     }
 
@@ -323,16 +388,15 @@ export default function PlayerPage() {
       return
     }
 
-    const singleItemLoop = items.length === 1
-
     async function setupYoutube() {
       try {
         await loadYouTubeApi()
-        if (cancelled || !youtubeIframeRef.current) return
+        if (cancelled || !youtubeContainerRef.current || !window.YT?.Player) return
 
-        youtubePlayerRef.current?.destroy?.()
+        cleanupYoutubePlayer()
+        youtubeContainerRef.current.innerHTML = ''
 
-        youtubePlayerRef.current = new window.YT.Player(youtubeIframeRef.current, {
+        youtubePlayerRef.current = new window.YT.Player(youtubeContainerRef.current, {
           videoId,
           playerVars: {
             autoplay: 1,
@@ -343,9 +407,7 @@ export default function PlayerPage() {
             mute: 1,
             fs: 0,
             iv_load_policy: 3,
-            disablekb: 1,
-            loop: singleItemLoop ? 1 : 0,
-            playlist: singleItemLoop ? videoId : undefined
+            disablekb: 1
           },
           events: {
             onReady: (event) => {
@@ -360,16 +422,12 @@ export default function PlayerPage() {
               if (event.data === window.YT.PlayerState.ENDED) {
                 if (itemsRef.current.length <= 1) {
                   try {
-                    event.target.seekTo(0)
+                    event.target.seekTo(0, true)
                     event.target.playVideo()
                   } catch (_) {}
                 } else {
                   goNext()
                 }
-              }
-
-              if (event.data === window.YT.PlayerState.UNSTARTED) {
-                scheduleAdvance(item.duration_seconds || 30)
               }
             },
             onError: () => {
@@ -378,8 +436,8 @@ export default function PlayerPage() {
           }
         })
       } catch (e) {
-        console.warn('YouTube API setup failed:', e)
-        scheduleAdvance(item.duration_seconds || 30)
+        console.warn('YouTube init failed:', e)
+        handleMediaError()
       }
     }
 
@@ -388,7 +446,7 @@ export default function PlayerPage() {
     return () => {
       cancelled = true
     }
-  }, [currentIdx, items, status, goNext])
+  }, [currentIdx, items, status, cleanupYoutubePlayer, goNext, handleMediaError])
 
   if (status === 'loading') {
     return (
@@ -424,22 +482,21 @@ export default function PlayerPage() {
   const item = items[currentIdx]
   if (!item) return null
 
-  const youtubeVideoId =
-    item.item_type === 'youtube'
-      ? extractYouTubeId(item.original_url || item.resolved_url)
-      : null
+  let driveVideoId = null
+  let driveVideoPrimary = null
+  let driveVideoFallback = null
+  let driveVideoPoster = null
 
-  const cleanYoutubeSrc =
-    youtubeVideoId
-      ? buildYouTubeEmbedUrl(youtubeVideoId, items.length === 1)
-      : null
+  if (item.item_type === 'drive_video') {
+    driveVideoId = extractDriveFileId(item.original_url || item.resolved_url)
+    driveVideoPrimary = driveVideoId ? buildDriveVideoStreamUrl(driveVideoId) : item.resolved_url
+    driveVideoFallback = driveVideoId ? buildDriveVideoFallbackStreamUrl(driveVideoId) : null
+    driveVideoPoster = driveVideoId ? buildDriveImageUrl(driveVideoId) : undefined
+  }
 
   return (
     <div className="player-root">
-      <div
-        key={item.id}
-        className={`player-media ${isVisible ? 'player-media-enter' : 'player-media-leave'}`}
-      >
+      <div className={`player-media ${isVisible ? 'player-media-enter' : 'player-media-leave'}`}>
         {(item.item_type === 'image' || item.item_type === 'drive_image') && (
           <img
             src={item.resolved_url}
@@ -451,39 +508,50 @@ export default function PlayerPage() {
 
         {item.item_type === 'youtube' && (
           <div className="player-youtube-shell">
-            <iframe
-              ref={youtubeIframeRef}
-              src={cleanYoutubeSrc}
-              title={item.title || 'YouTube'}
-              allow="autoplay; encrypted-media"
-              allowFullScreen={false}
-              onError={handleMediaError}
-            />
+            <div ref={youtubeContainerRef} className="player-youtube-api" />
           </div>
         )}
 
         {item.item_type === 'drive_video' && (
-          <iframe
-            src={item.resolved_url}
-            title={item.title || 'Drive video'}
-            allow="autoplay"
-            allowFullScreen
+          <video
+            ref={activeVideoRef}
+            autoPlay
+            muted
+            playsInline
+            preload="auto"
+            controls={false}
+            poster={driveVideoPoster}
+            onEnded={handleVideoEnded}
             onError={handleMediaError}
-          />
+          >
+            <source src={driveVideoPrimary} type="video/mp4" />
+            {driveVideoFallback && <source src={driveVideoFallback} type="video/mp4" />}
+          </video>
         )}
 
         {item.item_type === 'mp4' && (
           <video
+            ref={activeVideoRef}
             src={item.resolved_url}
             autoPlay
             muted
             playsInline
             preload="auto"
-            onEnded={goNext}
+            controls={false}
+            onEnded={handleVideoEnded}
             onError={handleMediaError}
           />
         )}
       </div>
+
+      <video
+        ref={preloadVideoRef}
+        className="player-preload-video"
+        muted
+        playsInline
+        preload="auto"
+        aria-hidden="true"
+      />
     </div>
   )
 }

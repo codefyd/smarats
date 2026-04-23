@@ -1,163 +1,149 @@
-import { useCallback, useEffect, useMemo, useRef, useState } from 'react'
-import { useNavigate, useParams } from 'react-router-dom'
+import { useEffect, useRef, useState, useCallback } from 'react'
+import { useParams, useNavigate } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
 import {
-  buildDriveVideoFallbackUrl,
-  buildDriveVideoStreamUrl,
-  buildPosterForItem,
-  buildYouTubeEmbedUrl,
-  extractDriveFileId,
   extractYouTubeId,
-  isImageType,
-  isNativeVideoType
+  extractDriveFileId,
+  buildYouTubeEmbedUrl,
+  buildDriveImageUrl,
+  buildDriveVideoUrl
 } from '../lib/urlUtils'
 
-function getOtherLayer(name) {
-  return name === 'a' ? 'b' : 'a'
-}
+function arraysEqualByIdentity(a, b) {
+  if (a.length !== b.length) return false
 
-function areItemsEqual(prevItems, nextItems) {
-  if (prevItems.length !== nextItems.length) return false
-
-  for (let i = 0; i < prevItems.length; i += 1) {
-    const a = prevItems[i]
-    const b = nextItems[i]
-
-    if (a?.id !== b?.id) return false
-    if (a?.resolved_url !== b?.resolved_url) return false
-    if (a?.duration_seconds !== b?.duration_seconds) return false
-    if (a?.order_index !== b?.order_index) return false
-    if (a?.item_type !== b?.item_type) return false
+  for (let i = 0; i < a.length; i += 1) {
+    if (a[i]?.id !== b[i]?.id) return false
+    if (a[i]?.resolved_url !== b[i]?.resolved_url) return false
+    if (a[i]?.duration_seconds !== b[i]?.duration_seconds) return false
+    if (a[i]?.order_index !== b[i]?.order_index) return false
   }
 
   return true
 }
 
-function ensurePreconnect(href) {
-  if (!href) return
-  const exists = document.head.querySelector(`link[rel="preconnect"][href="${href}"]`)
-  if (exists) return
+function normalizePlayableItem(item) {
+  if (!item) return item
 
-  const link = document.createElement('link')
-  link.rel = 'preconnect'
-  link.href = href
-  link.crossOrigin = 'anonymous'
-  document.head.appendChild(link)
-}
+  if (item.item_type === 'drive_video') {
+    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
+    if (!fileId) return item
 
-function MediaLayer({ item, visible, onReady, onError, onEnded }) {
-  const poster = useMemo(() => buildPosterForItem(item), [item])
-
-  useEffect(() => {
-    if (!item) return
-
-    if (item.item_type === 'youtube') {
-      const timer = setTimeout(() => onReady?.(), 350)
-      return () => clearTimeout(timer)
+    return {
+      ...item,
+      resolved_url: buildDriveVideoUrl(fileId),
+      poster_url: buildDriveImageUrl(fileId)
     }
-  }, [item, onReady])
-
-  if (!item) {
-    return <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`} />
   }
 
-  if (isImageType(item.item_type)) {
-    return (
-      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
-        <img
-          src={item.resolved_url}
-          alt={item.title || ''}
-          className="player-media-el"
-          draggable="false"
-          onLoad={onReady}
-          onError={onError}
-        />
-      </div>
-    )
+  if (item.item_type === 'drive_image') {
+    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
+    if (!fileId) return item
+
+    return {
+      ...item,
+      resolved_url: buildDriveImageUrl(fileId)
+    }
   }
 
   if (item.item_type === 'youtube') {
     const videoId = extractYouTubeId(item.original_url || item.resolved_url)
-    const src = videoId ? buildYouTubeEmbedUrl(videoId, false) : item.resolved_url
+    if (!videoId) return item
 
-    return (
-      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
-        <div className="player-youtube-shell">
-          {poster ? <img src={poster} alt="" className="player-media-el player-poster-overlay" draggable="false" /> : null}
-          <iframe
-            src={src}
-            title={item.title || 'YouTube'}
-            className="player-media-el"
-            allow="autoplay; encrypted-media"
-            allowFullScreen={false}
-            onLoad={() => onReady?.()}
-            onError={onError}
-          />
-        </div>
-      </div>
-    )
+    return {
+      ...item,
+      resolved_url: buildYouTubeEmbedUrl(videoId, false)
+    }
   }
 
-  if (item.item_type === 'drive_video') {
-    const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-    const primary = fileId ? buildDriveVideoStreamUrl(fileId) : item.resolved_url
-    const fallback = fileId ? buildDriveVideoFallbackUrl(fileId) : ''
+  return item
+}
 
+function preloadItem(item) {
+  return new Promise((resolve) => {
+    if (!item) {
+      resolve(false)
+      return
+    }
+
+    const safeResolve = () => resolve(true)
+
+    if (item.item_type === 'image' || item.item_type === 'drive_image') {
+      const img = new Image()
+      img.onload = safeResolve
+      img.onerror = safeResolve
+      img.src = item.resolved_url
+      return
+    }
+
+    if (item.item_type === 'mp4' || item.item_type === 'drive_video') {
+      const video = document.createElement('video')
+      video.preload = 'auto'
+      video.muted = true
+      video.playsInline = true
+      video.oncanplay = safeResolve
+      video.onerror = safeResolve
+      video.src = item.resolved_url
+      video.load()
+
+      setTimeout(safeResolve, 1200)
+      return
+    }
+
+    if (item.item_type === 'youtube') {
+      setTimeout(safeResolve, 250)
+      return
+    }
+
+    safeResolve()
+  })
+}
+
+function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
+  if (!item) return null
+
+  if (item.item_type === 'image' || item.item_type === 'drive_image') {
     return (
-      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
-        <video
-          className="player-media-el"
-          autoPlay={visible}
-          muted
-          playsInline
-          preload="auto"
-          controls={false}
-          poster={poster || undefined}
-          onCanPlay={onReady}
-          onLoadedData={onReady}
-          onEnded={onEnded}
-          onError={onError}
-        >
-          <source src={primary} type="video/mp4" />
-          {fallback ? <source src={fallback} type="video/mp4" /> : null}
-        </video>
-      </div>
-    )
-  }
-
-  if (isNativeVideoType(item.item_type)) {
-    return (
-      <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
-        <video
-          className="player-media-el"
-          src={item.resolved_url}
-          autoPlay={visible}
-          muted
-          playsInline
-          preload="auto"
-          controls={false}
-          poster={poster || undefined}
-          onCanPlay={onReady}
-          onLoadedData={onReady}
-          onEnded={onEnded}
-          onError={onError}
-        />
-      </div>
-    )
-  }
-
-  return (
-    <div className={`player-layer ${visible ? 'player-layer-visible' : 'player-layer-hidden'}`}>
       <img
         src={item.resolved_url}
         alt={item.title || ''}
-        className="player-media-el"
+        onError={onError}
         draggable="false"
-        onLoad={onReady}
+        className={isActive ? 'player-kenburns' : ''}
+      />
+    )
+  }
+
+  if (item.item_type === 'youtube') {
+    return (
+      <iframe
+        src={item.resolved_url}
+        title={item.title || 'YouTube'}
+        allow="autoplay; encrypted-media"
+        allowFullScreen={false}
         onError={onError}
       />
-    </div>
-  )
+    )
+  }
+
+  if (item.item_type === 'drive_video' || item.item_type === 'mp4') {
+    return (
+      <video
+        ref={videoRef}
+        src={item.resolved_url}
+        poster={item.poster_url}
+        autoPlay={isActive}
+        muted
+        playsInline
+        preload="auto"
+        controls={false}
+        onEnded={onEnded}
+        onError={onError}
+      />
+    )
+  }
+
+  return null
 }
 
 export default function PlayerPage() {
@@ -166,20 +152,25 @@ export default function PlayerPage() {
 
   const [status, setStatus] = useState('loading')
   const [errorMsg, setErrorMsg] = useState('')
-  const [, setScreen] = useState(null)
+  const [screen, setScreen] = useState(null)
   const [items, setItems] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeLayer, setActiveLayer] = useState('a')
-  const [layers, setLayers] = useState({ a: null, b: null })
+  const [layerAItem, setLayerAItem] = useState(null)
+  const [layerBItem, setLayerBItem] = useState(null)
 
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
   const pollTimerRef = useRef(null)
-  const pendingSwapRef = useRef(false)
-  const layerReadyRef = useRef({ a: false, b: false })
+  const transitionRef = useRef(false)
+
   const itemsRef = useRef([])
   const currentIdxRef = useRef(0)
+  const activeLayerRef = useRef('a')
+
+  const videoARef = useRef(null)
+  const videoBRef = useRef(null)
 
   useEffect(() => {
     itemsRef.current = items
@@ -190,17 +181,83 @@ export default function PlayerPage() {
   }, [currentIdx])
 
   useEffect(() => {
-    ensurePreconnect('https://www.youtube.com')
-    ensurePreconnect('https://www.youtube-nocookie.com')
-    ensurePreconnect('https://i.ytimg.com')
-    ensurePreconnect('https://drive.google.com')
-    ensurePreconnect('https://drive.googleusercontent.com')
+    activeLayerRef.current = activeLayer
+  }, [activeLayer])
+
+  const clearAdvanceTimer = useCallback(() => {
+    clearTimeout(advanceTimerRef.current)
   }, [])
 
-  const currentItem = items[currentIdx] || null
-  const nextIdx = items.length ? (currentIdx + 1) % items.length : 0
-  const nextItem = items[nextIdx] || null
-  const inactiveLayer = getOtherLayer(activeLayer)
+  const getCurrentItem = useCallback(() => {
+    return itemsRef.current[currentIdxRef.current] || null
+  }, [])
+
+  const getNextIndex = useCallback(() => {
+    const list = itemsRef.current
+    if (!list.length) return 0
+    return (currentIdxRef.current + 1) % list.length
+  }, [])
+
+  const scheduleAdvance = useCallback((seconds) => {
+    clearAdvanceTimer()
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, Math.max(1, Number(seconds) || 10) * 1000)
+  }, [clearAdvanceTimer])
+
+  const handleMediaError = useCallback((e) => {
+    console.warn(
+      'Media failed, skipping to next:',
+      e?.target?.currentSrc || e?.target?.src || getCurrentItem()?.resolved_url
+    )
+
+    clearAdvanceTimer()
+    advanceTimerRef.current = setTimeout(() => {
+      goNext()
+    }, 1200)
+  }, [clearAdvanceTimer, getCurrentItem])
+
+  const prepareInactiveLayer = useCallback(async (item) => {
+    const normalized = normalizePlayableItem(item)
+    const inactiveLayer = activeLayerRef.current === 'a' ? 'b' : 'a'
+
+    if (inactiveLayer === 'a') {
+      setLayerAItem(normalized)
+    } else {
+      setLayerBItem(normalized)
+    }
+
+    await preloadItem(normalized)
+    return inactiveLayer
+  }, [])
+
+  const swapToIndex = useCallback(async (targetIndex) => {
+    const list = itemsRef.current
+    if (!list.length || transitionRef.current) return
+
+    transitionRef.current = true
+    clearAdvanceTimer()
+
+    const targetItem = list[targetIndex]
+    const preparedLayer = await prepareInactiveLayer(targetItem)
+
+    setTimeout(() => {
+      setCurrentIdx(targetIndex)
+      setActiveLayer(preparedLayer)
+
+      setTimeout(() => {
+        transitionRef.current = false
+      }, 520)
+    }, 60)
+  }, [clearAdvanceTimer, prepareInactiveLayer])
+
+  const goNext = useCallback(async () => {
+    const list = itemsRef.current
+    if (!list.length) return
+
+    const nextIndex = getNextIndex()
+    await swapToIndex(nextIndex)
+  }, [getNextIndex, swapToIndex])
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -209,16 +266,19 @@ export default function PlayerPage() {
         .maybeSingle()
 
       if (screenErr) throw screenErr
+
       if (!screenData) {
         setStatus('error')
         setErrorMsg('الشاشة غير موجودة')
         return
       }
+
       if (!screenData.is_active) {
         setStatus('error')
         setErrorMsg('الشاشة متوقفة حالياً')
         return
       }
+
       if (!screenData.organization_active) {
         setStatus('error')
         setErrorMsg('الجهة غير نشطة')
@@ -249,36 +309,55 @@ export default function PlayerPage() {
         return
       }
 
+      const nextItems = itemsData.map(normalizePlayableItem)
+
       if (!preserveCurrent) {
-        setItems(itemsData)
+        setItems(nextItems)
         setCurrentIdx(0)
+        setLayerAItem(nextItems[0] || null)
+        setLayerBItem(nextItems[1] || null)
+        setActiveLayer('a')
         setStatus('ready')
         return
       }
 
       const prevItems = itemsRef.current
-      const prevIdx = currentIdxRef.current
-      const currentVisible = prevItems[prevIdx]
+      const currentItem = prevItems[currentIdxRef.current]
 
-      if (areItemsEqual(prevItems, itemsData)) {
+      if (arraysEqualByIdentity(prevItems, nextItems)) {
         setStatus('ready')
         return
       }
 
-      setItems(itemsData)
+      setItems(nextItems)
 
-      if (!currentVisible) {
-        setCurrentIdx((prev) => Math.min(prev, Math.max(itemsData.length - 1, 0)))
+      if (!currentItem) {
+        setCurrentIdx(0)
+        setLayerAItem(nextItems[0] || null)
+        setLayerBItem(nextItems[1] || null)
+        setActiveLayer('a')
         setStatus('ready')
         return
       }
 
-      const sameItemNewIndex = itemsData.findIndex((entry) => entry.id === currentVisible.id)
+      const sameItemNewIndex = nextItems.findIndex(i => i.id === currentItem.id)
 
       if (sameItemNewIndex >= 0) {
         setCurrentIdx(sameItemNewIndex)
+
+        const active = activeLayerRef.current
+        if (active === 'a') {
+          setLayerAItem(nextItems[sameItemNewIndex] || null)
+          setLayerBItem(nextItems[(sameItemNewIndex + 1) % nextItems.length] || null)
+        } else {
+          setLayerBItem(nextItems[sameItemNewIndex] || null)
+          setLayerAItem(nextItems[(sameItemNewIndex + 1) % nextItems.length] || null)
+        }
       } else {
-        setCurrentIdx((prev) => Math.min(prev, Math.max(itemsData.length - 1, 0)))
+        setCurrentIdx(0)
+        setLayerAItem(nextItems[0] || null)
+        setLayerBItem(nextItems[1] || null)
+        setActiveLayer('a')
       }
 
       setStatus('ready')
@@ -287,24 +366,11 @@ export default function PlayerPage() {
       setStatus('error')
       setErrorMsg(err.message || 'حدث خطأ')
     }
-  }, [navigate, publicId])
+  }, [publicId, navigate])
 
   useEffect(() => {
     loadData(false)
   }, [loadData])
-
-  useEffect(() => {
-    if (status !== 'ready' || !currentItem) return
-
-    layerReadyRef.current.a = false
-    layerReadyRef.current.b = false
-    pendingSwapRef.current = false
-
-    setLayers({
-      [activeLayer]: currentItem,
-      [inactiveLayer]: nextItem || null
-    })
-  }, [activeLayer, currentItem, inactiveLayer, nextItem, status])
 
   useEffect(() => {
     if (status !== 'ready') return
@@ -354,85 +420,48 @@ export default function PlayerPage() {
     }, 10000)
 
     return () => clearInterval(pollTimerRef.current)
-  }, [loadData, status])
+  }, [status, loadData])
 
   useEffect(() => {
     if (status !== 'error') return
-    const timer = setTimeout(() => loadData(false), 30000)
-    return () => clearTimeout(timer)
-  }, [loadData, status])
 
-  const swapToNext = useCallback(() => {
-    const hiddenLayer = getOtherLayer(activeLayer)
-
-    setActiveLayer(hiddenLayer)
-    setCurrentIdx((idx) => {
-      const list = itemsRef.current
-      if (!list.length) return 0
-      return (idx + 1) % list.length
-    })
-  }, [activeLayer])
-
-  const requestAdvance = useCallback(() => {
-    const hiddenLayer = getOtherLayer(activeLayer)
-    const prepared = layers[hiddenLayer]
-    const isReady = layerReadyRef.current[hiddenLayer]
-
-    if (!prepared || isReady) {
-      swapToNext()
-      return
-    }
-
-    pendingSwapRef.current = true
-  }, [activeLayer, layers, swapToNext])
-
-  const scheduleAdvance = useCallback((seconds) => {
-    clearTimeout(advanceTimerRef.current)
-    advanceTimerRef.current = setTimeout(() => {
-      requestAdvance()
-    }, Math.max(1, Number(seconds) || 10) * 1000)
-  }, [requestAdvance])
+    const t = setTimeout(() => loadData(false), 30000)
+    return () => clearTimeout(t)
+  }, [status, loadData])
 
   useEffect(() => {
-    if (status !== 'ready' || !currentItem) return
+    if (status !== 'ready' || items.length === 0) return
 
-    clearTimeout(advanceTimerRef.current)
+    const item = getCurrentItem()
+    if (!item) return
 
-    if (isImageType(currentItem.item_type) || currentItem.item_type === 'youtube') {
-      scheduleAdvance(currentItem.duration_seconds)
+    clearAdvanceTimer()
+
+    if (
+      item.item_type === 'image' ||
+      item.item_type === 'drive_image' ||
+      item.item_type === 'youtube'
+    ) {
+      scheduleAdvance(item.duration_seconds)
     }
 
-    return () => clearTimeout(advanceTimerRef.current)
-  }, [currentItem, scheduleAdvance, status])
+    const nextIndex = getNextIndex()
+    prepareInactiveLayer(items[nextIndex])
 
-  const handleLayerReady = useCallback((layerName) => {
-    layerReadyRef.current[layerName] = true
+    return () => clearAdvanceTimer()
+  }, [
+    status,
+    items,
+    currentIdx,
+    activeLayer,
+    getCurrentItem,
+    getNextIndex,
+    clearAdvanceTimer,
+    scheduleAdvance,
+    prepareInactiveLayer
+  ])
 
-    if (pendingSwapRef.current && layerName === getOtherLayer(activeLayer)) {
-      pendingSwapRef.current = false
-      swapToNext()
-    }
-  }, [activeLayer, swapToNext])
-
-  const handleMediaError = useCallback((e) => {
-    console.warn(
-      'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
-    )
-
-    clearTimeout(advanceTimerRef.current)
-
-    const hiddenLayer = getOtherLayer(activeLayer)
-    layerReadyRef.current[hiddenLayer] = true
-
-    setTimeout(() => {
-      requestAdvance()
-    }, 700)
-  }, [activeLayer, requestAdvance])
-
-  const handleNativeVideoEnded = useCallback(() => {
-    requestAdvance()
-  }, [requestAdvance])
+  const currentItem = getCurrentItem()
 
   if (status === 'loading') {
     return (
@@ -451,8 +480,13 @@ export default function PlayerPage() {
         <div className="text-center max-w-md">
           <div className="text-5xl mb-4 opacity-50">⚠️</div>
           <h1 className="text-2xl font-bold mb-2">{errorMsg}</h1>
-          <p className="text-sm opacity-60 mb-4">سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية</p>
-          <button onClick={() => loadData(false)} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm">
+          <p className="text-sm opacity-60 mb-4">
+            سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية
+          </p>
+          <button
+            onClick={() => loadData(false)}
+            className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm"
+          >
             إعادة المحاولة الآن
           </button>
         </div>
@@ -460,24 +494,30 @@ export default function PlayerPage() {
     )
   }
 
+  if (!currentItem) return null
+
   return (
     <div className="player-root">
       <div className="player-stage">
-        <MediaLayer
-          item={layers.a}
-          visible={activeLayer === 'a'}
-          onReady={() => handleLayerReady('a')}
-          onError={handleMediaError}
-          onEnded={handleNativeVideoEnded}
-        />
+        <div className={`player-layer ${activeLayer === 'a' ? 'is-active' : 'is-next'}`}>
+          <MediaNode
+            item={layerAItem}
+            isActive={activeLayer === 'a'}
+            videoRef={videoARef}
+            onEnded={goNext}
+            onError={handleMediaError}
+          />
+        </div>
 
-        <MediaLayer
-          item={layers.b}
-          visible={activeLayer === 'b'}
-          onReady={() => handleLayerReady('b')}
-          onError={handleMediaError}
-          onEnded={handleNativeVideoEnded}
-        />
+        <div className={`player-layer ${activeLayer === 'b' ? 'is-active' : 'is-next'}`}>
+          <MediaNode
+            item={layerBItem}
+            isActive={activeLayer === 'b'}
+            videoRef={videoBRef}
+            onEnded={goNext}
+            onError={handleMediaError}
+          />
+        </div>
       </div>
     </div>
   )

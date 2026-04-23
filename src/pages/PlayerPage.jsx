@@ -6,7 +6,7 @@ export default function PlayerPage() {
   const { publicId } = useParams()
   const navigate = useNavigate()
 
-  const [status, setStatus] = useState('loading') // loading | error | ready | locked
+  const [status, setStatus] = useState('loading') // loading | error | ready
   const [errorMsg, setErrorMsg] = useState('')
   const [screen, setScreen] = useState(null)
   const [items, setItems] = useState([])
@@ -15,14 +15,14 @@ export default function PlayerPage() {
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
+  const pollTimerRef = useRef(null)
   const videoRef = useRef(null)
 
   // --------------------------------------------------------------------------
   // تحميل البيانات الأولية
   // --------------------------------------------------------------------------
-  const loadData = useCallback(async () => {
+  const loadData = useCallback(async (preserveCurrent = false) => {
     try {
-      // 1) جلب بيانات الشاشة عبر الدالة العامة
       const { data: screenData, error: screenErr } = await supabase
         .rpc('get_public_screen', { _public_id: publicId })
         .maybeSingle()
@@ -46,17 +46,17 @@ export default function PlayerPage() {
 
       setScreen(screenData)
 
-      // 2) التحقق من الحماية بكلمة سر
       if (screenData.has_password) {
-        const unlocked = sessionStorage.getItem(`smarats_unlock_${publicId}`) ||
-                         localStorage.getItem(`smarats_unlock_${publicId}`)
+        const unlocked =
+          sessionStorage.getItem(`smarats_unlock_${publicId}`) ||
+          localStorage.getItem(`smarats_unlock_${publicId}`)
+
         if (!unlocked) {
           navigate(`/s/${publicId}/unlock`)
           return
         }
       }
 
-      // 3) جلب عناصر قائمة العرض
       const { data: itemsData, error: itemsErr } = await supabase
         .rpc('get_public_playlist_items', { _public_id: publicId })
 
@@ -68,17 +68,36 @@ export default function PlayerPage() {
         return
       }
 
-      setItems(itemsData)
-      setCurrentIdx(0)
+      setItems(prevItems => {
+        const nextItems = itemsData || []
+
+        if (!preserveCurrent || prevItems.length === 0) {
+          setCurrentIdx(0)
+          return nextItems
+        }
+
+        const currentItem = prevItems[currentIdx]
+        if (!currentItem) {
+          setCurrentIdx(0)
+          return nextItems
+        }
+
+        const newIndex = nextItems.findIndex(i => i.id === currentItem.id)
+        setCurrentIdx(newIndex >= 0 ? newIndex : 0)
+        return nextItems
+      })
+
       setStatus('ready')
     } catch (err) {
       console.error('Player load error:', err)
       setStatus('error')
       setErrorMsg(err.message || 'حدث خطأ')
     }
-  }, [publicId, navigate])
+  }, [publicId, navigate, currentIdx])
 
-  useEffect(() => { loadData() }, [loadData])
+  useEffect(() => {
+    loadData(false)
+  }, [loadData])
 
   // --------------------------------------------------------------------------
   // Wake Lock — منع شاشة التوقف
@@ -114,22 +133,45 @@ export default function PlayerPage() {
   }, [status])
 
   // --------------------------------------------------------------------------
-  // إعادة تحميل تلقائية كل ساعة لجلب التحديثات
+  // إعادة تحميل كاملة كل ساعة
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'ready') return
+
     reloadTimerRef.current = setTimeout(() => {
       window.location.reload()
     }, 60 * 60 * 1000)
+
     return () => clearTimeout(reloadTimerRef.current)
   }, [status])
+
+  // --------------------------------------------------------------------------
+  // Polling تلقائي لتحديث القائمة بدون تحديث الصفحة
+  // --------------------------------------------------------------------------
+  useEffect(() => {
+    if (status !== 'ready') return
+
+    async function pollLatest() {
+      try {
+        await loadData(true)
+      } catch (e) {
+        console.warn('Polling failed:', e)
+      }
+    }
+
+    pollTimerRef.current = setInterval(() => {
+      pollLatest()
+    }, 10000)
+
+    return () => clearInterval(pollTimerRef.current)
+  }, [status, loadData])
 
   // --------------------------------------------------------------------------
   // إعادة محاولة عند الخطأ كل 30 ثانية
   // --------------------------------------------------------------------------
   useEffect(() => {
     if (status !== 'error') return
-    const t = setTimeout(() => loadData(), 30000)
+    const t = setTimeout(() => loadData(false), 30000)
     return () => clearTimeout(t)
   }, [status, loadData])
 
@@ -137,7 +179,10 @@ export default function PlayerPage() {
   // منطق التقدم بين العناصر
   // --------------------------------------------------------------------------
   function goNext() {
-    setCurrentIdx(idx => (idx + 1) % items.length)
+    setCurrentIdx(idx => {
+      if (!items.length) return 0
+      return (idx + 1) % items.length
+    })
   }
 
   function scheduleAdvance(seconds) {
@@ -158,12 +203,12 @@ export default function PlayerPage() {
   }, [currentIdx, status, items])
 
   // --------------------------------------------------------------------------
-  // معالجة أخطاء الوسائط — تخطي للعنصر التالي
+  // معالجة أخطاء الوسائط
   // --------------------------------------------------------------------------
   function handleMediaError(e) {
     console.warn(
       'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || item?.resolved_url
+      e?.target?.currentSrc || e?.target?.src || items?.[currentIdx]?.resolved_url
     )
     clearTimeout(advanceTimerRef.current)
     advanceTimerRef.current = setTimeout(goNext, 1500)
@@ -186,8 +231,13 @@ export default function PlayerPage() {
         <div className="text-center max-w-md">
           <div className="text-5xl mb-4 opacity-50">⚠️</div>
           <h1 className="text-2xl font-bold mb-2">{errorMsg}</h1>
-          <p className="text-sm opacity-60 mb-4">سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية</p>
-          <button onClick={loadData} className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm">
+          <p className="text-sm opacity-60 mb-4">
+            سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية
+          </p>
+          <button
+            onClick={() => loadData(false)}
+            className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm"
+          >
             إعادة المحاولة الآن
           </button>
         </div>

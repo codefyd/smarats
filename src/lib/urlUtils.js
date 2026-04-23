@@ -8,25 +8,35 @@ export function extractYouTubeId(url) {
     /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]{11})/,
     /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/
   ]
+
   for (const p of patterns) {
     const m = url.match(p)
     if (m) return m[1]
   }
+
   return null
 }
 
-// تحويل رابط يوتيوب لصيغة embed مع autoplay + mute + no controls
-export function buildYouTubeEmbedUrl(videoId) {
+// تحويل رابط يوتيوب لصيغة embed أنظف
+export function buildYouTubeEmbedUrl(videoId, loop = false) {
   const params = new URLSearchParams({
     autoplay: '1',
     mute: '1',
     controls: '0',
-    showinfo: '0',
     rel: '0',
     modestbranding: '1',
     playsinline: '1',
-    iv_load_policy: '3'
+    iv_load_policy: '3',
+    fs: '0',
+    disablekb: '1',
+    enablejsapi: '1'
   })
+
+  if (loop) {
+    params.set('loop', '1')
+    params.set('playlist', videoId)
+  }
+
   return `https://www.youtube.com/embed/${videoId}?${params.toString()}`
 }
 
@@ -37,10 +47,12 @@ export function extractDriveFileId(url) {
     /[?&]id=([a-zA-Z0-9_-]+)/,
     /\/open\?id=([a-zA-Z0-9_-]+)/
   ]
+
   for (const p of patterns) {
     const m = url.match(p)
     if (m) return m[1]
   }
+
   return null
 }
 
@@ -50,7 +62,6 @@ export function buildDriveDirectUrl(fileId, isVideo = false) {
     return `https://drive.google.com/file/d/${fileId}/preview`
   }
 
-  // للصور: thumbnail أكثر استقراراً من uc?export=view
   return `https://drive.google.com/thumbnail?id=${fileId}&sz=w2000`
 }
 
@@ -64,7 +75,7 @@ function looksLikeImage(url) {
 }
 
 // ============================================================================
-// الدالة الرئيسية: تأخذ رابطاً وتعيد { type, resolvedUrl }
+// الدالة الرئيسية
 // ============================================================================
 export function resolveMediaUrl(rawUrl, userHint = null) {
   const url = String(rawUrl || '').trim()
@@ -77,7 +88,7 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
   if (url.includes('youtube.com') || url.includes('youtu.be')) {
     const id = extractYouTubeId(url)
     if (!id) return { type: null, resolvedUrl: url, error: 'رابط يوتيوب غير صالح' }
-    return { type: 'youtube', resolvedUrl: buildYouTubeEmbedUrl(id) }
+    return { type: 'youtube', resolvedUrl: buildYouTubeEmbedUrl(id, false) }
   }
 
   // Google Drive
@@ -96,11 +107,11 @@ export function resolveMediaUrl(rawUrl, userHint = null) {
   if (looksLikeVideo(url)) {
     return { type: 'mp4', resolvedUrl: url }
   }
+
   if (looksLikeImage(url)) {
     return { type: 'image', resolvedUrl: url }
   }
 
-  // افتراضياً نحسبه صورة
   return { type: 'image', resolvedUrl: url }
 }
 
@@ -113,5 +124,6 @@ export function itemTypeLabel(type) {
     drive_video: 'فيديو درايف',
     mp4: 'فيديو MP4'
   }
+
   return labels[type] || type
 }

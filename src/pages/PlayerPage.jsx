@@ -135,8 +135,8 @@ function preloadItem(item) {
     video.preload = 'auto'
     video.muted = true
     video.playsInline = true
-
     const sources = getVideoSources(item)
+
     if (sources[0]) {
       video.src = sources[0]
       video.load()
@@ -153,11 +153,23 @@ function MediaLayer({
   visible,
   isActive,
   onEnded,
-  onError
+  onError,
+  onReady
 }) {
   const videoRef = useRef(null)
   const youtubeContainerRef = useRef(null)
   const youtubePlayerRef = useRef(null)
+  const readyNotifiedRef = useRef(false)
+
+  const markReady = useCallback(() => {
+    if (readyNotifiedRef.current) return
+    readyNotifiedRef.current = true
+    onReady?.()
+  }, [onReady])
+
+  useEffect(() => {
+    readyNotifiedRef.current = false
+  }, [item])
 
   const cleanupYoutube = useCallback(() => {
     if (youtubePlayerRef.current?.destroy) {
@@ -178,10 +190,28 @@ function MediaLayer({
 
   useEffect(() => {
     if (!item) return
+
+    if (item.item_type === 'image' || item.item_type === 'drive_image') {
+      markReady()
+    }
+  }, [item, markReady])
+
+  useEffect(() => {
+    if (!item) return
     if (item.item_type !== 'mp4' && item.item_type !== 'drive_video') return
 
     const video = videoRef.current
     if (!video) return
+
+    const handleCanPlay = () => {
+      markReady()
+      if (isActive) {
+        const p = video.play()
+        if (p?.catch) p.catch(() => onError?.({ target: video }))
+      }
+    }
+
+    video.addEventListener('canplay', handleCanPlay)
 
     if (isActive) {
       try {
@@ -191,7 +221,7 @@ function MediaLayer({
       const p = video.play()
       if (p?.catch) {
         p.catch(() => {
-          onError?.({ target: video })
+          /* ننتظر canplay */
         })
       }
     } else {
@@ -199,7 +229,11 @@ function MediaLayer({
         video.pause()
       } catch (_) {}
     }
-  }, [item, isActive, onError])
+
+    return () => {
+      video.removeEventListener('canplay', handleCanPlay)
+    }
+  }, [item, isActive, markReady, onError])
 
   useEffect(() => {
     if (!item || item.item_type !== 'youtube') {
@@ -208,7 +242,6 @@ function MediaLayer({
     }
 
     if (!isActive) {
-      cleanupYoutube()
       return
     }
 
@@ -242,6 +275,7 @@ function MediaLayer({
           },
           events: {
             onReady: (event) => {
+              markReady()
               try {
                 event.target.mute()
                 event.target.playVideo()
@@ -252,6 +286,10 @@ function MediaLayer({
 
               if (event.data === window.YT.PlayerState.ENDED) {
                 onEnded?.()
+              }
+
+              if (event.data === window.YT.PlayerState.PLAYING) {
+                markReady()
               }
             },
             onError: () => {
@@ -271,7 +309,7 @@ function MediaLayer({
       cancelled = true
       cleanupYoutube()
     }
-  }, [item, isActive, onEnded, onError, cleanupYoutube])
+  }, [item, isActive, onEnded, onError, cleanupYoutube, markReady])
 
   if (!item) {
     return (
@@ -292,6 +330,7 @@ function MediaLayer({
             src={item.resolved_url}
             alt={item.title || ''}
             className="player-media-element player-image"
+            onLoad={markReady}
             onError={onError}
             draggable="false"
           />
@@ -348,6 +387,9 @@ export default function PlayerPage() {
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeLayer, setActiveLayer] = useState('a')
 
+  const [layerA, setLayerA] = useState(null)
+  const [layerB, setLayerB] = useState(null)
+
   const wakeLockRef = useRef(null)
   const reloadTimerRef = useRef(null)
   const advanceTimerRef = useRef(null)
@@ -356,9 +398,8 @@ export default function PlayerPage() {
 
   const itemsRef = useRef([])
   const currentIdxRef = useRef(0)
-
-  const [layerA, setLayerA] = useState(null)
-  const [layerB, setLayerB] = useState(null)
+  const pendingTargetRef = useRef(null)
+  const pendingReadyRef = useRef(false)
 
   useEffect(() => {
     itemsRef.current = items
@@ -376,39 +417,26 @@ export default function PlayerPage() {
     preconnectOnce('https://googleusercontent.com')
   }, [])
 
-  const prepareLayersForIndex = useCallback((index, list) => {
+  const buildPair = useCallback((index, list, active = 'a') => {
     if (!list.length) return
 
     const currentItem = list[index]
     const nextIndex = safeNextIndex(index, list.length)
     const nextItem = list[nextIndex]
 
-    setLayerA({ item: currentItem, index })
-    setLayerB({ item: nextItem, index: nextIndex })
-    setActiveLayer('a')
+    if (active === 'a') {
+      setLayerA({ item: currentItem, index })
+      setLayerB({ item: nextItem, index: nextIndex })
+      setActiveLayer('a')
+    } else {
+      setLayerB({ item: currentItem, index })
+      setLayerA({ item: nextItem, index: nextIndex })
+      setActiveLayer('b')
+    }
 
     preloadItem(nextItem)
     preloadItem(list[safeNextIndex(nextIndex, list.length)])
   }, [])
-
-  const syncLayersAfterSwap = useCallback((newCurrentIndex, newItems) => {
-    const currentItem = newItems[newCurrentIndex]
-    const nextIndex = safeNextIndex(newCurrentIndex, newItems.length)
-    const nextItem = newItems[nextIndex]
-
-    if (activeLayer === 'a') {
-      setLayerB({ item: currentItem, index: newCurrentIndex })
-      setLayerA({ item: nextItem, index: nextIndex })
-      setActiveLayer('b')
-    } else {
-      setLayerA({ item: currentItem, index: newCurrentIndex })
-      setLayerB({ item: nextItem, index: nextIndex })
-      setActiveLayer('a')
-    }
-
-    preloadItem(nextItem)
-    preloadItem(newItems[safeNextIndex(nextIndex, newItems.length)])
-  }, [activeLayer])
 
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
@@ -465,7 +493,7 @@ export default function PlayerPage() {
       if (!preserveCurrent) {
         setItems(nextItems)
         setCurrentIdx(0)
-        prepareLayersForIndex(0, nextItems)
+        buildPair(0, nextItems, 'a')
         setStatus('ready')
         return
       }
@@ -492,14 +520,14 @@ export default function PlayerPage() {
 
       setItems(nextItems)
       setCurrentIdx(resolvedIndex)
-      prepareLayersForIndex(resolvedIndex, nextItems)
+      buildPair(resolvedIndex, nextItems, activeLayer)
       setStatus('ready')
     } catch (err) {
       console.error('Player load error:', err)
       setStatus('error')
       setErrorMsg(err.message || 'حدث خطأ')
     }
-  }, [publicId, navigate, prepareLayersForIndex])
+  }, [publicId, navigate, buildPair, activeLayer])
 
   useEffect(() => {
     loadData(false)
@@ -561,21 +589,57 @@ export default function PlayerPage() {
     return () => clearTimeout(t)
   }, [status, loadData])
 
+  const completeTransition = useCallback(() => {
+    const targetIndex = pendingTargetRef.current
+    if (targetIndex == null) return
+
+    setCurrentIdx(targetIndex)
+    setActiveLayer(prev => (prev === 'a' ? 'b' : 'a'))
+
+    const list = itemsRef.current
+    const nextIndex = safeNextIndex(targetIndex, list.length)
+    const nextItem = list[nextIndex]
+
+    if (activeLayer === 'a') {
+      setLayerA({ item: nextItem, index: nextIndex })
+    } else {
+      setLayerB({ item: nextItem, index: nextIndex })
+    }
+
+    preloadItem(nextItem)
+    preloadItem(list[safeNextIndex(nextIndex, list.length)])
+
+    pendingTargetRef.current = null
+    pendingReadyRef.current = false
+
+    setTimeout(() => {
+      transitionLockRef.current = false
+    }, 50)
+  }, [activeLayer])
+
   const goToIndex = useCallback((nextIndex) => {
     const list = itemsRef.current
     if (!list.length) return
     if (transitionLockRef.current) return
 
     transitionLockRef.current = true
+    pendingTargetRef.current = nextIndex
+    pendingReadyRef.current = false
     clearTimeout(advanceTimerRef.current)
 
-    syncLayersAfterSwap(nextIndex, list)
-    setCurrentIdx(nextIndex)
+    const targetItem = list[nextIndex]
 
-    setTimeout(() => {
-      transitionLockRef.current = false
-    }, 520)
-  }, [syncLayersAfterSwap])
+    if (activeLayer === 'a') {
+      setLayerB({ item: targetItem, index: nextIndex })
+    } else {
+      setLayerA({ item: targetItem, index: nextIndex })
+    }
+
+    if (targetItem.item_type === 'image' || targetItem.item_type === 'drive_image') {
+      pendingReadyRef.current = true
+      setTimeout(() => completeTransition(), 40)
+    }
+  }, [activeLayer, completeTransition])
 
   const goNext = useCallback(() => {
     const list = itemsRef.current
@@ -589,6 +653,14 @@ export default function PlayerPage() {
       goNext()
     }, Math.max(1, Number(seconds) || 10) * 1000)
   }, [goNext])
+
+  const handleMediaReady = useCallback(() => {
+    if (pendingTargetRef.current == null) return
+    if (pendingReadyRef.current) return
+
+    pendingReadyRef.current = true
+    completeTransition()
+  }, [completeTransition])
 
   const handleMediaEnded = useCallback(() => {
     if (itemsRef.current.length <= 1) {
@@ -604,6 +676,10 @@ export default function PlayerPage() {
       'Media failed, skipping to next:',
       e?.target?.currentSrc || e?.target?.src || itemsRef.current?.[currentIdxRef.current]?.resolved_url
     )
+
+    pendingTargetRef.current = null
+    pendingReadyRef.current = false
+    transitionLockRef.current = false
 
     clearTimeout(advanceTimerRef.current)
     advanceTimerRef.current = setTimeout(() => {
@@ -667,6 +743,7 @@ export default function PlayerPage() {
         isActive={showLayerA}
         onEnded={handleMediaEnded}
         onError={handleMediaError}
+        onReady={handleMediaReady}
       />
 
       <MediaLayer
@@ -675,6 +752,7 @@ export default function PlayerPage() {
         isActive={!showLayerA}
         onEnded={handleMediaEnded}
         onError={handleMediaError}
+        onReady={handleMediaReady}
       />
     </div>
   )

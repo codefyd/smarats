@@ -1,5 +1,7 @@
 import { Link, useLocation, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import BrandMark from './BrandMark'
+import SubscriptionBanner from './SubscriptionBanner'
 
 export default function DashboardLayout({ children }) {
   const { user, role, signOut } = useAuth()
@@ -15,11 +17,10 @@ export default function DashboardLayout({ children }) {
 
   return (
     <div className="min-h-screen bg-slate-50">
-      {/* الهيدر */}
       <header className="bg-white border-b border-slate-200 sticky top-0 z-10">
         <div className="max-w-6xl mx-auto px-4 py-3 flex items-center justify-between">
           <Link to="/dashboard" className="flex items-center gap-2">
-            <div className="w-8 h-8 rounded-lg bg-brand-600 flex items-center justify-center text-white font-bold text-sm">س</div>
+            <BrandMark size={32} />
             <span className="font-bold">سماراتس</span>
           </Link>
 
@@ -39,7 +40,6 @@ export default function DashboardLayout({ children }) {
           </div>
         </div>
 
-        {/* قائمة للجوال */}
         <nav className="md:hidden border-t border-slate-200 px-4 py-2 flex gap-1 overflow-x-auto">
           <NavLink to="/dashboard" active={location.pathname === '/dashboard'}>الرئيسية</NavLink>
           <NavLink to="/dashboard/screens" active={isActive('/dashboard/screens')}>الشاشات</NavLink>
@@ -50,6 +50,7 @@ export default function DashboardLayout({ children }) {
       </header>
 
       <main className="max-w-6xl mx-auto px-4 py-6">
+        <SubscriptionBanner />
         {children}
       </main>
     </div>

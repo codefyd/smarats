@@ -1,6 +1,7 @@
 import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
+import BrandMark from '../components/BrandMark'
 
 export default function LoginPage() {
   const { signIn } = useAuth()
@@ -29,7 +30,7 @@ export default function LoginPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
       <div className="w-full max-w-sm">
         <Link to="/" className="flex items-center justify-center gap-2 mb-8">
-          <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold">س</div>
+          <BrandMark size={40} />
           <span className="text-xl font-bold">سماراتس</span>
         </Link>
 

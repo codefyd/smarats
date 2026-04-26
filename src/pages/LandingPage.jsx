@@ -1,4 +1,5 @@
 import { Link } from 'react-router-dom'
+import BrandMark from '../components/BrandMark'
 
 export default function LandingPage() {
   return (
@@ -7,7 +8,7 @@ export default function LandingPage() {
       <header className="border-b border-slate-200 bg-white">
         <div className="max-w-6xl mx-auto px-4 py-4 flex items-center justify-between">
           <div className="flex items-center gap-2">
-            <div className="w-9 h-9 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold text-lg">س</div>
+            <BrandMark size={36} />
             <span className="text-lg font-bold">سماراتس</span>
           </div>
           <div className="flex items-center gap-2">

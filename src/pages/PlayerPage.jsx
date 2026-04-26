@@ -10,14 +10,12 @@ import {
 
 function arraysEqualByIdentity(a, b) {
   if (a.length !== b.length) return false
-
   for (let i = 0; i < a.length; i += 1) {
     if (a[i]?.id !== b[i]?.id) return false
     if (a[i]?.resolved_url !== b[i]?.resolved_url) return false
     if (a[i]?.duration_seconds !== b[i]?.duration_seconds) return false
     if (a[i]?.order_index !== b[i]?.order_index) return false
   }
-
   return true
 }
 
@@ -27,10 +25,7 @@ function isVideoItem(item) {
 
 function getEffectiveDurationSeconds(item) {
   const seconds = Number(item?.duration_seconds)
-  if (Number.isFinite(seconds) && seconds > 0) {
-    return seconds
-  }
-
+  if (Number.isFinite(seconds) && seconds > 0) return seconds
   return null
 }
 
@@ -39,7 +34,6 @@ function normalizePlayableItem(item) {
 
   if (item.item_type === 'drive_video') {
     const fileId = extractDriveFileId(item.original_url || item.resolved_url)
-
     return {
       ...item,
       resolved_url: item.resolved_url,
@@ -48,16 +42,12 @@ function normalizePlayableItem(item) {
   }
 
   if (item.item_type === 'drive_image') {
-    return {
-      ...item,
-      resolved_url: item.resolved_url
-    }
+    return { ...item, resolved_url: item.resolved_url }
   }
 
   if (item.item_type === 'youtube') {
     const videoId = extractYouTubeId(item.original_url || item.resolved_url)
     if (!videoId) return item
-
     return {
       ...item,
       resolved_url: buildYouTubeEmbedUrl(videoId, false)
@@ -69,17 +59,10 @@ function normalizePlayableItem(item) {
 
 function preloadItem(item) {
   return new Promise((resolve) => {
-    if (!item) {
-      resolve(false)
-      return
-    }
+    if (!item) { resolve(false); return }
 
     let settled = false
-    const safeResolve = () => {
-      if (settled) return
-      settled = true
-      resolve(true)
-    }
+    const safeResolve = () => { if (settled) return; settled = true; resolve(true) }
 
     if (item.item_type === 'image' || item.item_type === 'drive_image') {
       const img = new Image()
@@ -99,7 +82,6 @@ function preloadItem(item) {
       video.onerror = safeResolve
       video.src = item.resolved_url
       video.load()
-
       setTimeout(safeResolve, 1500)
       return
     }
@@ -126,34 +108,19 @@ function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
           video.muted = true
           video.playsInline = true
           const p = video.play()
-          if (p?.catch) {
-            p.catch((err) => console.warn('Video autoplay failed:', err))
-          }
-        } catch (err) {
-          console.warn('Video autoplay failed:', err)
-        }
+          if (p?.catch) p.catch((err) => console.warn('Video autoplay failed:', err))
+        } catch (err) { console.warn('Video autoplay failed:', err) }
       }
-
       playNow()
     } else {
-      try {
-        video.pause()
-        video.currentTime = 0
-      } catch (_) {}
+      try { video.pause(); video.currentTime = 0 } catch (_) {}
     }
   }, [isActive, item, videoRef])
 
   if (!item) return null
 
   if (item.item_type === 'image' || item.item_type === 'drive_image') {
-    return (
-      <img
-        src={item.resolved_url}
-        alt={item.title || ''}
-        onError={onError}
-        draggable="false"
-      />
-    )
+    return <img src={item.resolved_url} alt={item.title || ''} onError={onError} draggable="false" />
   }
 
   if (item.item_type === 'youtube') {
@@ -193,7 +160,8 @@ export default function PlayerPage() {
 
   const [status, setStatus] = useState('loading')
   const [errorMsg, setErrorMsg] = useState('')
-  const [screen, setScreen] = useState(null)
+  const [errorKind, setErrorKind] = useState('') // 'expired' | 'inactive' | 'not_found' | 'no_items'
+  const [, setScreen] = useState(null)
   const [items, setItems] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeLayer, setActiveLayer] = useState('a')
@@ -213,17 +181,9 @@ export default function PlayerPage() {
   const videoARef = useRef(null)
   const videoBRef = useRef(null)
 
-  useEffect(() => {
-    itemsRef.current = items
-  }, [items])
-
-  useEffect(() => {
-    currentIdxRef.current = currentIdx
-  }, [currentIdx])
-
-  useEffect(() => {
-    activeLayerRef.current = activeLayer
-  }, [activeLayer])
+  useEffect(() => { itemsRef.current = items }, [items])
+  useEffect(() => { currentIdxRef.current = currentIdx }, [currentIdx])
+  useEffect(() => { activeLayerRef.current = activeLayer }, [activeLayer])
 
   const clearAdvanceTimer = useCallback(() => {
     clearTimeout(advanceTimerRef.current)
@@ -247,27 +207,17 @@ export default function PlayerPage() {
   const stopCurrentVideoPlayback = useCallback(() => {
     const activeVideo = getActiveVideoRef()
     if (!activeVideo) return
-
-    try {
-      activeVideo.pause()
-      activeVideo.currentTime = 0
-    } catch (_) {}
+    try { activeVideo.pause(); activeVideo.currentTime = 0 } catch (_) {}
   }, [getActiveVideoRef])
 
   const scheduleAdvance = useCallback((seconds) => {
     const normalizedSeconds = Number(seconds)
-    if (!Number.isFinite(normalizedSeconds) || normalizedSeconds <= 0) {
-      return false
-    }
+    if (!Number.isFinite(normalizedSeconds) || normalizedSeconds <= 0) return false
 
     clearAdvanceTimer()
     advanceTimerRef.current = setTimeout(() => {
       const current = getCurrentItem()
-
-      if (isVideoItem(current)) {
-        stopCurrentVideoPlayback()
-      }
-
+      if (isVideoItem(current)) stopCurrentVideoPlayback()
       goNext()
     }, normalizedSeconds * 1000)
 
@@ -275,31 +225,17 @@ export default function PlayerPage() {
   }, [clearAdvanceTimer, getCurrentItem, stopCurrentVideoPlayback])
 
   const handleMediaError = useCallback((e) => {
-    console.warn(
-      'Media failed, skipping to next:',
-      e?.target?.currentSrc || e?.target?.src || getCurrentItem()?.resolved_url
-    )
-
-    if (isVideoItem(getCurrentItem())) {
-      stopCurrentVideoPlayback()
-    }
-
+    console.warn('Media failed:', e?.target?.currentSrc || e?.target?.src || getCurrentItem()?.resolved_url)
+    if (isVideoItem(getCurrentItem())) stopCurrentVideoPlayback()
     clearAdvanceTimer()
-    advanceTimerRef.current = setTimeout(() => {
-      goNext()
-    }, 1200)
+    advanceTimerRef.current = setTimeout(() => goNext(), 1200)
   }, [clearAdvanceTimer, getCurrentItem, stopCurrentVideoPlayback])
 
   const prepareInactiveLayer = useCallback(async (item) => {
     const normalized = normalizePlayableItem(item)
     const inactiveLayer = activeLayerRef.current === 'a' ? 'b' : 'a'
-
-    if (inactiveLayer === 'a') {
-      setLayerAItem(normalized)
-    } else {
-      setLayerBItem(normalized)
-    }
-
+    if (inactiveLayer === 'a') setLayerAItem(normalized)
+    else setLayerBItem(normalized)
     await preloadItem(normalized)
     return inactiveLayer
   }, [])
@@ -317,10 +253,7 @@ export default function PlayerPage() {
     setTimeout(() => {
       setCurrentIdx(targetIndex)
       setActiveLayer(preparedLayer)
-
-      setTimeout(() => {
-        transitionRef.current = false
-      }, 520)
+      setTimeout(() => { transitionRef.current = false }, 520)
     }, 60)
   }, [clearAdvanceTimer, prepareInactiveLayer])
 
@@ -336,12 +269,8 @@ export default function PlayerPage() {
       activeVideo.currentTime = 0
       activeVideo.muted = true
       activeVideo.playsInline = true
-
       const promise = activeVideo.play()
-      if (promise?.catch) {
-        promise.catch((err) => console.warn('Replay failed:', err))
-      }
-
+      if (promise?.catch) promise.catch((err) => console.warn('Replay failed:', err))
       return true
     } catch (err) {
       console.warn('Replay current video failed:', err)
@@ -360,13 +289,10 @@ export default function PlayerPage() {
         const replayed = replayCurrentIfSingle()
         if (replayed) {
           const limited = getEffectiveDurationSeconds(currentItem)
-          if (limited) {
-            scheduleAdvance(limited)
-          }
+          if (limited) scheduleAdvance(limited)
           return
         }
       }
-
       clearAdvanceTimer()
       scheduleAdvance(getEffectiveDurationSeconds(currentItem) || 10)
       return
@@ -386,19 +312,30 @@ export default function PlayerPage() {
 
       if (!screenData) {
         setStatus('error')
+        setErrorKind('not_found')
         setErrorMsg('الشاشة غير موجودة')
         return
       }
 
       if (!screenData.is_active) {
         setStatus('error')
+        setErrorKind('inactive')
         setErrorMsg('الشاشة متوقفة حالياً')
         return
       }
 
       if (!screenData.organization_active) {
         setStatus('error')
+        setErrorKind('inactive')
         setErrorMsg('الجهة غير نشطة')
+        return
+      }
+
+      // فحص الاشتراك — جديد
+      if (!screenData.subscription_active) {
+        setStatus('error')
+        setErrorKind('expired')
+        setErrorMsg('الاشتراك منتهي')
         return
       }
 
@@ -422,6 +359,7 @@ export default function PlayerPage() {
 
       if (!itemsData || itemsData.length === 0) {
         setStatus('error')
+        setErrorKind('no_items')
         setErrorMsg('لا توجد عناصر في قائمة العرض')
         return
       }
@@ -461,7 +399,6 @@ export default function PlayerPage() {
 
       if (sameItemNewIndex >= 0) {
         setCurrentIdx(sameItemNewIndex)
-
         const active = activeLayerRef.current
         if (active === 'a') {
           setLayerAItem(nextItems[sameItemNewIndex] || null)
@@ -481,13 +418,12 @@ export default function PlayerPage() {
     } catch (err) {
       console.error('Player load error:', err)
       setStatus('error')
+      setErrorKind('not_found')
       setErrorMsg(err.message || 'حدث خطأ')
     }
   }, [publicId, navigate])
 
-  useEffect(() => {
-    loadData(false)
-  }, [loadData])
+  useEffect(() => { loadData(false) }, [loadData])
 
   useEffect(() => {
     if (status !== 'ready') return
@@ -497,15 +433,11 @@ export default function PlayerPage() {
         if ('wakeLock' in navigator) {
           wakeLockRef.current = await navigator.wakeLock.request('screen')
         }
-      } catch (e) {
-        console.warn('Wake lock failed:', e)
-      }
+      } catch (e) { console.warn('Wake lock failed:', e) }
     }
 
     function handleVisibility() {
-      if (document.visibilityState === 'visible') {
-        requestWakeLock()
-      }
+      if (document.visibilityState === 'visible') requestWakeLock()
     }
 
     requestWakeLock()
@@ -513,38 +445,29 @@ export default function PlayerPage() {
 
     return () => {
       document.removeEventListener('visibilitychange', handleVisibility)
-      if (wakeLockRef.current) {
-        wakeLockRef.current.release().catch(() => {})
-      }
+      if (wakeLockRef.current) wakeLockRef.current.release().catch(() => {})
     }
   }, [status])
 
   useEffect(() => {
     if (status !== 'ready') return
-
-    reloadTimerRef.current = setTimeout(() => {
-      window.location.reload()
-    }, 60 * 60 * 1000)
-
+    reloadTimerRef.current = setTimeout(() => { window.location.reload() }, 60 * 60 * 1000)
     return () => clearTimeout(reloadTimerRef.current)
   }, [status])
 
   useEffect(() => {
     if (status !== 'ready') return
-
-    pollTimerRef.current = setInterval(() => {
-      loadData(true)
-    }, 10000)
-
+    pollTimerRef.current = setInterval(() => { loadData(true) }, 10000)
     return () => clearInterval(pollTimerRef.current)
   }, [status, loadData])
 
+  // عند الخطأ — إعادة المحاولة. للاشتراك المنتهي فترة أطول (5 دقائق بدل 30 ثانية)
   useEffect(() => {
     if (status !== 'error') return
-
-    const t = setTimeout(() => loadData(false), 30000)
+    const retryMs = errorKind === 'expired' ? 5 * 60 * 1000 : 30 * 1000
+    const t = setTimeout(() => loadData(false), retryMs)
     return () => clearTimeout(t)
-  }, [status, loadData])
+  }, [status, errorKind, loadData])
 
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
@@ -553,15 +476,10 @@ export default function PlayerPage() {
     if (!item) return
 
     clearAdvanceTimer()
-
     const hasLimitedDuration = scheduleAdvance(getEffectiveDurationSeconds(item))
 
     if (!hasLimitedDuration) {
-      if (
-        item.item_type === 'image' ||
-        item.item_type === 'drive_image' ||
-        item.item_type === 'youtube'
-      ) {
+      if (item.item_type === 'image' || item.item_type === 'drive_image' || item.item_type === 'youtube') {
         scheduleAdvance(10)
       }
     }
@@ -570,30 +488,14 @@ export default function PlayerPage() {
     prepareInactiveLayer(items[nextIndex])
 
     return () => clearAdvanceTimer()
-  }, [
-    status,
-    items,
-    currentIdx,
-    activeLayer,
-    getCurrentItem,
-    getNextIndex,
-    clearAdvanceTimer,
-    scheduleAdvance,
-    prepareInactiveLayer
-  ])
+  }, [status, items, currentIdx, activeLayer, getCurrentItem, getNextIndex, clearAdvanceTimer, scheduleAdvance, prepareInactiveLayer])
 
   const handleVideoEnded = useCallback(() => {
     const current = itemsRef.current[currentIdxRef.current]
-    if (!current) {
-      goNext()
-      return
-    }
+    if (!current) { goNext(); return }
 
     const limitedDuration = getEffectiveDurationSeconds(current)
-
-    if (limitedDuration) {
-      return
-    }
+    if (limitedDuration) return
 
     if (isVideoItem(current) && itemsRef.current.length === 1) {
       replayCurrentIfSingle()
@@ -617,14 +519,30 @@ export default function PlayerPage() {
   }
 
   if (status === 'error') {
+    // شاشة "الاشتراك منتهي" — تصميم خاص مهيب
+    if (errorKind === 'expired') {
+      return (
+        <div className="player-root flex items-center justify-center p-6">
+          <div className="text-center max-w-2xl">
+            <div className="text-7xl mb-6 opacity-90">⏸️</div>
+            <h1 className="text-4xl md:text-6xl font-black mb-4">الاشتراك منتهي</h1>
+            <p className="text-xl md:text-2xl opacity-80 mb-2">
+              يجب تجديد الاشتراك لاستمرار العرض
+            </p>
+            <p className="text-base opacity-50 mt-8">
+              ستحاول الشاشة الاتصال تلقائياً كل 5 دقائق
+            </p>
+          </div>
+        </div>
+      )
+    }
+
     return (
       <div className="player-root flex items-center justify-center p-6">
         <div className="text-center max-w-md">
           <div className="text-5xl mb-4 opacity-50">⚠️</div>
           <h1 className="text-2xl font-bold mb-2">{errorMsg}</h1>
-          <p className="text-sm opacity-60 mb-4">
-            سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية
-          </p>
+          <p className="text-sm opacity-60 mb-4">سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية</p>
           <button
             onClick={() => loadData(false)}
             className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm"

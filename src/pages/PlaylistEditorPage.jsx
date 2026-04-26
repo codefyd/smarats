@@ -1,11 +1,13 @@
 import { useEffect, useState } from 'react'
 import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import DashboardLayout from '../components/DashboardLayout'
 import { resolveMediaUrl, itemTypeLabel } from '../lib/urlUtils'
 
 export default function PlaylistEditorPage() {
   const { id } = useParams()
+  const { canEdit } = useAuth()
   const [playlist, setPlaylist] = useState(null)
   const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
@@ -26,44 +28,30 @@ export default function PlaylistEditorPage() {
       supabase.from('playlist_items').select('*').eq('playlist_id', id).order('order_index', { ascending: true })
     ])
 
-    if (plError) {
-      alert('خطأ في تحميل القائمة: ' + plError.message)
-    }
-
-    if (itError) {
-      alert('خطأ في تحميل العناصر: ' + itError.message)
-    }
+    if (plError) alert('خطأ في تحميل القائمة: ' + plError.message)
+    if (itError) alert('خطأ في تحميل العناصر: ' + itError.message)
 
     setPlaylist(pl || null)
     setItems(it || [])
     setLoading(false)
   }
 
-  useEffect(() => {
-    load()
-  }, [id])
+  useEffect(() => { load() }, [id])
 
-  // توليد المعاينة أثناء الكتابة
   useEffect(() => {
-    if (!url.trim()) {
-      setPreview(null)
-      return
-    }
-
+    if (!url.trim()) { setPreview(null); return }
     const resolved = resolveMediaUrl(url, url.includes('drive.google.com') ? driveHint : null)
     setPreview(resolved)
   }, [url, driveHint])
 
   async function addItem(e) {
     e.preventDefault()
-
     if (!preview || preview.error) {
       alert('تأكد من صحة الرابط')
       return
     }
 
     setAdding(true)
-
     const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.order_index ?? 0)) : -1
 
     const payload = {
@@ -89,10 +77,7 @@ export default function PlaylistEditorPage() {
       return
     }
 
-    // تحديث محلي مباشر
     setItems(prev => [...prev, data])
-
-    // تنظيف النموذج
     setUrl('')
     setTitle('')
     setDuration(10)
@@ -102,12 +87,9 @@ export default function PlaylistEditorPage() {
 
   async function deleteItem(itemId) {
     if (!confirm('حذف هذا العنصر؟')) return
-
     const oldItems = items
     setItems(prev => prev.filter(i => i.id !== itemId))
-
     const { error } = await supabase.from('playlist_items').delete().eq('id', itemId)
-
     if (error) {
       setItems(oldItems)
       alert('خطأ: ' + error.message)
@@ -117,7 +99,6 @@ export default function PlaylistEditorPage() {
   async function moveItem(itemId, direction) {
     const idx = items.findIndex(i => i.id === itemId)
     const targetIdx = direction === 'up' ? idx - 1 : idx + 1
-
     if (idx < 0 || targetIdx < 0 || targetIdx >= items.length) return
 
     const current = items[idx]
@@ -126,8 +107,6 @@ export default function PlaylistEditorPage() {
     const swapped = [...items]
     swapped[idx] = { ...target, order_index: current.order_index }
     swapped[targetIdx] = { ...current, order_index: target.order_index }
-
-    // ترتيب محلي مباشر
     setItems(swapped)
 
     const { error: err1 } = await supabase
@@ -148,18 +127,13 @@ export default function PlaylistEditorPage() {
 
   async function updateDuration(itemId, newDuration) {
     const numericDuration = Number(newDuration)
-
     if (!numericDuration || numericDuration < 3 || numericDuration > 300) {
       alert('المدة يجب أن تكون بين 3 و 300 ثانية')
       return
     }
 
     const oldItems = items
-    setItems(prev =>
-      prev.map(i =>
-        i.id === itemId ? { ...i, duration_seconds: numericDuration } : i
-      )
-    )
+    setItems(prev => prev.map(i => i.id === itemId ? { ...i, duration_seconds: numericDuration } : i))
 
     const { error } = await supabase
       .from('playlist_items')
@@ -173,27 +147,16 @@ export default function PlaylistEditorPage() {
   }
 
   if (loading) {
-    return (
-      <DashboardLayout>
-        <div className="text-center py-12 text-slate-500">جاري التحميل...</div>
-      </DashboardLayout>
-    )
+    return <DashboardLayout><div className="text-center py-12 text-slate-500">جاري التحميل...</div></DashboardLayout>
   }
 
   if (!playlist) {
-    return (
-      <DashboardLayout>
-        <div className="text-center py-12 text-slate-500">القائمة غير موجودة</div>
-      </DashboardLayout>
-    )
+    return <DashboardLayout><div className="text-center py-12 text-slate-500">القائمة غير موجودة</div></DashboardLayout>
   }
 
   return (
     <DashboardLayout>
-      <Link
-        to="/dashboard/playlists"
-        className="text-sm text-slate-500 hover:text-slate-700 mb-3 inline-block"
-      >
+      <Link to="/dashboard/playlists" className="text-sm text-slate-500 hover:text-slate-700 mb-3 inline-block">
         ← العودة للقوائم
       </Link>
 
@@ -202,110 +165,84 @@ export default function PlaylistEditorPage() {
         <p className="text-sm text-slate-500 mt-1">{items.length} عنصر</p>
       </div>
 
-      <form onSubmit={addItem} className="card mb-5">
-        <h3 className="font-bold mb-4">إضافة عنصر جديد</h3>
-
-        <div className="space-y-3">
-          <div>
-            <label className="label">الرابط *</label>
-            <input
-              type="url"
-              required
-              value={url}
-              onChange={e => setUrl(e.target.value)}
-              className="input"
-              placeholder="الصق رابط صورة / درايف / يوتيوب / MP4"
-              dir="ltr"
-            />
-            <p className="text-xs text-slate-500 mt-1">يتم اكتشاف نوع الرابط تلقائياً</p>
-          </div>
-
-          {url.includes('drive.google.com') && (
-            <div>
-              <label className="label">نوع المحتوى من درايف</label>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    value="image"
-                    checked={driveHint === 'image'}
-                    onChange={e => setDriveHint(e.target.value)}
-                  />
-                  <span>صورة</span>
-                </label>
-
-                <label className="flex items-center gap-2">
-                  <input
-                    type="radio"
-                    value="video"
-                    checked={driveHint === 'video'}
-                    onChange={e => setDriveHint(e.target.value)}
-                  />
-                  <span>فيديو</span>
-                </label>
-              </div>
-            </div>
-          )}
-
-          <div className="grid grid-cols-2 gap-3">
-            <div>
-              <label className="label">العنوان (اختياري)</label>
-              <input
-                type="text"
-                value={title}
-                onChange={e => setTitle(e.target.value)}
-                className="input"
-                placeholder="وصف قصير"
-              />
-            </div>
-
-            <div>
-              <label className="label">المدة بالثواني</label>
-              <input
-                type="number"
-                min={3}
-                max={300}
-                value={duration}
-                onChange={e => setDuration(e.target.value)}
-                className="input"
-              />
-            </div>
-          </div>
-
-          {preview && !preview.error && (
-            <div className="p-3 bg-slate-50 rounded-lg text-sm">
-              <div className="mb-1">
-                <span className="font-medium">النوع المكتشف: </span>
-                <span className="badge badge-blue">{itemTypeLabel(preview.type)}</span>
-              </div>
-
-              <div className="text-xs text-slate-500 break-all" dir="ltr">
-                {preview.resolvedUrl}
-              </div>
-            </div>
-          )}
-
-          {preview?.error && (
-            <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm">
-              {preview.error}
-            </div>
-          )}
-
-          <button
-            type="submit"
-            disabled={adding || !preview || !!preview.error}
-            className="btn btn-primary"
-          >
-            {adding ? 'جاري الإضافة...' : 'إضافة'}
-          </button>
+      {!canEdit && (
+        <div className="mb-5 p-3 rounded-lg bg-slate-100 text-slate-700 text-sm">
+          التعديل غير متاح حالياً. تقدر تشوف العناصر فقط.
         </div>
-      </form>
+      )}
+
+      {canEdit && (
+        <form onSubmit={addItem} className="card mb-5">
+          <h3 className="font-bold mb-4">إضافة عنصر جديد</h3>
+
+          <div className="space-y-3">
+            <div>
+              <label className="label">الرابط *</label>
+              <input
+                type="url"
+                required
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                className="input"
+                placeholder="الصق رابط صورة / درايف / يوتيوب / MP4"
+                dir="ltr"
+              />
+              <p className="text-xs text-slate-500 mt-1">يتم اكتشاف نوع الرابط تلقائياً</p>
+            </div>
+
+            {url.includes('drive.google.com') && (
+              <div>
+                <label className="label">نوع المحتوى من درايف</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" value="image" checked={driveHint === 'image'} onChange={e => setDriveHint(e.target.value)} />
+                    <span>صورة</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" value="video" checked={driveHint === 'video'} onChange={e => setDriveHint(e.target.value)} />
+                    <span>فيديو</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">العنوان (اختياري)</label>
+                <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="input" placeholder="وصف قصير" />
+              </div>
+              <div>
+                <label className="label">المدة بالثواني</label>
+                <input type="number" min={3} max={300} value={duration} onChange={e => setDuration(e.target.value)} className="input" />
+              </div>
+            </div>
+
+            {preview && !preview.error && (
+              <div className="p-3 bg-slate-50 rounded-lg text-sm">
+                <div className="mb-1">
+                  <span className="font-medium">النوع المكتشف: </span>
+                  <span className="badge badge-blue">{itemTypeLabel(preview.type)}</span>
+                </div>
+                <div className="text-xs text-slate-500 break-all" dir="ltr">{preview.resolvedUrl}</div>
+              </div>
+            )}
+
+            {preview?.error && (
+              <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm">{preview.error}</div>
+            )}
+
+            <button type="submit" disabled={adding || !preview || !!preview.error} className="btn btn-primary">
+              {adding ? 'جاري الإضافة...' : 'إضافة'}
+            </button>
+          </div>
+        </form>
+      )}
 
       {items.length === 0 ? (
         <div className="card text-center py-10">
           <div className="text-5xl mb-3">🎞️</div>
           <h3 className="font-bold mb-1">لا توجد عناصر بعد</h3>
-          <p className="text-sm text-slate-500">ابدأ بإضافة رابط من النموذج أعلاه</p>
+          {canEdit && <p className="text-sm text-slate-500">ابدأ بإضافة رابط من النموذج أعلاه</p>}
         </div>
       ) : (
         <div className="space-y-2">
@@ -316,6 +253,7 @@ export default function PlaylistEditorPage() {
               index={idx}
               isFirst={idx === 0}
               isLast={idx === items.length - 1}
+              canEdit={canEdit}
               onDelete={() => deleteItem(item.id)}
               onMoveUp={() => moveItem(item.id, 'up')}
               onMoveDown={() => moveItem(item.id, 'down')}
@@ -328,20 +266,15 @@ export default function PlaylistEditorPage() {
   )
 }
 
-function ItemRow({ item, index, isFirst, isLast, onDelete, onMoveUp, onMoveDown, onDurationChange }) {
+function ItemRow({ item, index, isFirst, isLast, canEdit, onDelete, onMoveUp, onMoveDown, onDurationChange }) {
   const [editingDuration, setEditingDuration] = useState(false)
   const [tempDuration, setTempDuration] = useState(item.duration_seconds)
 
-  useEffect(() => {
-    setTempDuration(item.duration_seconds)
-  }, [item.duration_seconds])
+  useEffect(() => { setTempDuration(item.duration_seconds) }, [item.duration_seconds])
 
   const typeIcons = {
-    image: '🖼️',
-    youtube: '▶️',
-    drive_image: '📁',
-    drive_video: '📹',
-    mp4: '🎬'
+    image: '🖼️', youtube: '▶️',
+    drive_image: '📁', drive_video: '📹', mp4: '🎬'
   }
 
   return (
@@ -355,56 +288,34 @@ function ItemRow({ item, index, isFirst, isLast, onDelete, onMoveUp, onMoveDown,
         <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
           <span className="badge badge-gray text-xs">{itemTypeLabel(item.item_type)}</span>
 
-          {editingDuration ? (
+          {canEdit && editingDuration ? (
             <input
-              type="number"
-              min={3}
-              max={300}
-              value={tempDuration}
+              type="number" min={3} max={300} value={tempDuration}
               onChange={e => setTempDuration(e.target.value)}
-              onBlur={() => {
-                onDurationChange(tempDuration)
-                setEditingDuration(false)
-              }}
-              onKeyDown={e => {
-                if (e.key === 'Enter') e.target.blur()
-              }}
+              onBlur={() => { onDurationChange(tempDuration); setEditingDuration(false) }}
+              onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
               autoFocus
               className="w-20 px-2 py-0.5 text-xs border rounded"
             />
-          ) : (
+          ) : canEdit ? (
             <button onClick={() => setEditingDuration(true)} className="hover:text-slate-700">
               {item.duration_seconds} ث
             </button>
+          ) : (
+            <span>{item.duration_seconds} ث</span>
           )}
         </div>
 
-        <div className="text-[11px] text-slate-400 truncate mt-1" dir="ltr">
-          {item.resolved_url}
+        <div className="text-[11px] text-slate-400 truncate mt-1" dir="ltr">{item.resolved_url}</div>
+      </div>
+
+      {canEdit && (
+        <div className="flex gap-1">
+          <button onClick={onMoveUp} disabled={isFirst} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↑</button>
+          <button onClick={onMoveDown} disabled={isLast} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↓</button>
+          <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">حذف</button>
         </div>
-      </div>
-
-      <div className="flex gap-1">
-        <button
-          onClick={onMoveUp}
-          disabled={isFirst}
-          className="btn btn-ghost text-xs px-2 disabled:opacity-30"
-        >
-          ↑
-        </button>
-
-        <button
-          onClick={onMoveDown}
-          disabled={isLast}
-          className="btn btn-ghost text-xs px-2 disabled:opacity-30"
-        >
-          ↓
-        </button>
-
-        <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">
-          حذف
-        </button>
-      </div>
+      )}
     </div>
   )
 }

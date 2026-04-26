@@ -2,6 +2,7 @@ import { useState } from 'react'
 import { Link, useNavigate } from 'react-router-dom'
 import { useAuth } from '../contexts/AuthContext'
 import { supabase } from '../lib/supabase'
+import BrandMark from '../components/BrandMark'
 
 export default function RegisterPage() {
   const { signUp } = useAuth()
@@ -15,9 +16,21 @@ export default function RegisterPage() {
   const [error, setError] = useState('')
   const [success, setSuccess] = useState(false)
 
+  function validateContact(value) {
+    const trimmed = value.trim()
+    if (trimmed.length < 7) return false
+    const digits = trimmed.replace(/\D/g, '')
+    return digits.length >= 7
+  }
+
   async function onSubmit(e) {
     e.preventDefault()
     setError('')
+
+    if (!validateContact(contactInfo)) {
+      setError('رقم التواصل مطلوب — أدخل رقم جوال صحيح (7 أرقام على الأقل)')
+      return
+    }
 
     if (password.length < 8) {
       setError('كلمة السر يجب أن تكون 8 أحرف على الأقل')
@@ -26,18 +39,15 @@ export default function RegisterPage() {
 
     setLoading(true)
     try {
-      // 1) إنشاء حساب المستخدم
       await signUp(email, password)
 
-      // 2) تسجيل الدخول تلقائياً (في حال لم يكن هناك تأكيد بريد)
       const { error: signInErr } = await supabase.auth.signInWithPassword({ email, password })
       if (signInErr) throw signInErr
 
-      // 3) إنشاء الجهة عبر دالة RPC
       const { error: rpcErr } = await supabase.rpc('register_organization', {
-        _name: orgName,
+        _name: orgName.trim(),
         _org_type: orgType,
-        _contact_info: contactInfo || null
+        _contact_info: contactInfo.trim()
       })
       if (rpcErr) throw rpcErr
 
@@ -75,7 +85,7 @@ export default function RegisterPage() {
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 py-10">
       <div className="w-full max-w-md">
         <Link to="/" className="flex items-center justify-center gap-2 mb-6">
-          <div className="w-10 h-10 rounded-xl bg-brand-600 flex items-center justify-center text-white font-bold">س</div>
+          <BrandMark size={40} />
           <span className="text-xl font-bold">سماراتس</span>
         </Link>
 
@@ -98,8 +108,17 @@ export default function RegisterPage() {
               </select>
             </div>
             <div>
-              <label className="label">معلومات التواصل (اختياري)</label>
-              <input type="text" value={contactInfo} onChange={e => setContactInfo(e.target.value)} className="input" placeholder="رقم جوال أو موقع" />
+              <label className="label">رقم التواصل <span className="text-red-500">*</span></label>
+              <input
+                type="tel"
+                required
+                value={contactInfo}
+                onChange={e => setContactInfo(e.target.value)}
+                className="input"
+                placeholder="مثال: 0501234567"
+                dir="ltr"
+              />
+              <p className="text-xs text-slate-500 mt-1">رقم جوال للتواصل بشأن الاشتراك والتجديد</p>
             </div>
 
             <div className="border-t border-slate-200 pt-4">

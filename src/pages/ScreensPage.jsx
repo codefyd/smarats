@@ -4,7 +4,7 @@ import { useAuth } from '../contexts/AuthContext'
 import DashboardLayout from '../components/DashboardLayout'
 
 export default function ScreensPage() {
-  const { orgId } = useAuth()
+  const { orgId, canEdit, org } = useAuth()
   const [screens, setScreens] = useState([])
   const [playlists, setPlaylists] = useState([])
   const [loading, setLoading] = useState(true)
@@ -13,15 +13,18 @@ export default function ScreensPage() {
   const [newPlaylistId, setNewPlaylistId] = useState('')
   const [editingId, setEditingId] = useState(null)
   const [copiedId, setCopiedId] = useState(null)
+  const [limits, setLimits] = useState(null) // {allowed, current, max}
 
   async function load() {
     setLoading(true)
-    const [{ data: scr }, { data: pls }] = await Promise.all([
+    const [{ data: scr }, { data: pls }, { data: limitsData }] = await Promise.all([
       supabase.from('screens').select('*').eq('organization_id', orgId).order('created_at', { ascending: false }),
-      supabase.from('playlists').select('id, name').eq('organization_id', orgId)
+      supabase.from('playlists').select('id, name').eq('organization_id', orgId),
+      supabase.rpc('check_can_create', { _org_id: orgId, _resource: 'screen' })
     ])
     setScreens(scr || [])
     setPlaylists(pls || [])
+    setLimits(limitsData || null)
     setLoading(false)
   }
 
@@ -31,7 +34,7 @@ export default function ScreensPage() {
     e.preventDefault()
     const { error } = await supabase.from('screens').insert({
       organization_id: orgId,
-      name: newName,
+      name: newName.trim(),
       playlist_id: newPlaylistId || null
     })
     if (error) return alert('خطأ: ' + error.message)
@@ -47,9 +50,28 @@ export default function ScreensPage() {
     load()
   }
 
-  async function updateScreen(id, updates) {
+  async function updateScreenBasics(id, updates) {
     const { error } = await supabase.from('screens').update(updates).eq('id', id)
     if (error) return alert('خطأ: ' + error.message)
+  }
+
+  async function updateScreenPassword(screenId, password) {
+    // null = إزالة، نص = تعيين/تغيير
+    const { error } = await supabase.rpc('set_screen_password', {
+      _screen_id: screenId,
+      _password: password
+    })
+    if (error) return alert('خطأ في كلمة السر: ' + error.message)
+  }
+
+  async function handleSave(screenId, updates, passwordChange) {
+    await updateScreenBasics(screenId, updates)
+    if (passwordChange.action === 'set') {
+      await updateScreenPassword(screenId, passwordChange.value)
+    } else if (passwordChange.action === 'clear') {
+      await updateScreenPassword(screenId, null)
+    }
+    setEditingId(null)
     load()
   }
 
@@ -67,17 +89,52 @@ export default function ScreensPage() {
     setTimeout(() => setCopiedId(null), 2000)
   }
 
+  // عرض حدود الباقة
+  const limitInfo = limits ? (
+    limits.max === null
+      ? `${limits.current} شاشة (غير محدود)`
+      : `${limits.current} / ${limits.max} شاشة`
+  ) : ''
+
+  const canCreateMore = canEdit && limits?.allowed
+
   return (
     <DashboardLayout>
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">الشاشات</h1>
-          <p className="text-sm text-slate-500 mt-1">كل شاشة لها رابط عرض فريد</p>
+          <p className="text-sm text-slate-500 mt-1">
+            كل شاشة لها رابط عرض فريد
+            {limitInfo && <span className="mx-2">·</span>}
+            {limitInfo && <span className="font-medium text-slate-700">{limitInfo}</span>}
+          </p>
         </div>
-        <button onClick={() => setShowNew(!showNew)} className="btn btn-primary">+ شاشة جديدة</button>
+        <button
+          onClick={() => setShowNew(!showNew)}
+          disabled={!canCreateMore}
+          className="btn btn-primary disabled:opacity-50 disabled:cursor-not-allowed"
+          title={
+            !canEdit ? 'الاشتراك منتهي أو الجهة معلّقة' :
+            !limits?.allowed ? 'تم الوصول لحد الباقة' : ''
+          }
+        >
+          + شاشة جديدة
+        </button>
       </div>
 
-      {showNew && (
+      {!canEdit && org && (
+        <div className="mb-5 p-3 rounded-lg bg-slate-100 text-slate-700 text-sm">
+          التعديل والإضافة غير متاحة حالياً. تقدر تشوف الشاشات والروابط فقط.
+        </div>
+      )}
+
+      {canEdit && limits && !limits.allowed && (
+        <div className="mb-5 p-3 rounded-lg bg-amber-50 text-amber-800 text-sm">
+          لقد وصلت إلى حد باقتك ({limits.max} شاشات). احذف شاشة قائمة أو ترقّى الباقة.
+        </div>
+      )}
+
+      {showNew && canCreateMore && (
         <form onSubmit={createScreen} className="card mb-5">
           <h3 className="font-bold mb-4">إنشاء شاشة جديدة</h3>
           <div className="space-y-3">
@@ -107,7 +164,9 @@ export default function ScreensPage() {
           <div className="text-5xl mb-3">📺</div>
           <h3 className="font-bold mb-1">لا توجد شاشات بعد</h3>
           <p className="text-sm text-slate-500 mb-4">أنشئ أول شاشة لك للبدء</p>
-          <button onClick={() => setShowNew(true)} className="btn btn-primary">+ شاشة جديدة</button>
+          {canCreateMore && (
+            <button onClick={() => setShowNew(true)} className="btn btn-primary">+ شاشة جديدة</button>
+          )}
         </div>
       ) : (
         <div className="space-y-3">
@@ -117,9 +176,10 @@ export default function ScreensPage() {
               screen={screen}
               playlists={playlists}
               isEditing={editingId === screen.id}
+              canEdit={canEdit}
               onEdit={() => setEditingId(screen.id)}
               onCancelEdit={() => setEditingId(null)}
-              onSave={(updates) => { updateScreen(screen.id, updates); setEditingId(null) }}
+              onSave={(updates, passwordChange) => handleSave(screen.id, updates, passwordChange)}
               onToggle={() => toggleActive(screen)}
               onDelete={() => deleteScreen(screen.id)}
               onCopy={() => copyLink(screen)}
@@ -132,7 +192,7 @@ export default function ScreensPage() {
   )
 }
 
-function ScreenRow({ screen, playlists, isEditing, onEdit, onCancelEdit, onSave, onToggle, onDelete, onCopy, copied }) {
+function ScreenRow({ screen, playlists, isEditing, canEdit, onEdit, onCancelEdit, onSave, onToggle, onDelete, onCopy, copied }) {
   const [name, setName] = useState(screen.name)
   const [playlistId, setPlaylistId] = useState(screen.playlist_id || '')
   const [password, setPassword] = useState('')
@@ -172,15 +232,23 @@ function ScreenRow({ screen, playlists, isEditing, onEdit, onCancelEdit, onSave,
               className="input"
               placeholder={screen.password_hash ? 'أدخل كلمة جديدة للتغيير' : 'اتركه فارغاً لعدم الحماية'}
               dir="ltr"
+              autoComplete="off"
             />
           </div>
           <div className="flex gap-2 pt-1">
             <button
               onClick={() => {
-                const updates = { name, playlist_id: playlistId || null }
-                if (password) updates.password_hash = password  // سنستخدم bcrypt لاحقاً، حالياً نحتفظ بها كنص
-                if (clearPassword) updates.password_hash = null
-                onSave(updates)
+                const updates = {
+                  name: name.trim(),
+                  playlist_id: playlistId || null
+                }
+                let passwordChange = { action: 'none' }
+                if (clearPassword) {
+                  passwordChange = { action: 'clear' }
+                } else if (password) {
+                  passwordChange = { action: 'set', value: password }
+                }
+                onSave(updates, passwordChange)
               }}
               className="btn btn-primary"
             >حفظ</button>
@@ -216,13 +284,15 @@ function ScreenRow({ screen, playlists, isEditing, onEdit, onCancelEdit, onSave,
         <a href={url} target="_blank" rel="noopener noreferrer" className="btn btn-secondary text-xs px-3 py-1">فتح</a>
       </div>
 
-      <div className="flex gap-2 flex-wrap">
-        <button onClick={onEdit} className="btn btn-ghost text-xs">تعديل</button>
-        <button onClick={onToggle} className="btn btn-ghost text-xs">
-          {screen.is_active ? 'إيقاف' : 'تفعيل'}
-        </button>
-        <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">حذف</button>
-      </div>
+      {canEdit && (
+        <div className="flex gap-2 flex-wrap">
+          <button onClick={onEdit} className="btn btn-ghost text-xs">تعديل</button>
+          <button onClick={onToggle} className="btn btn-ghost text-xs">
+            {screen.is_active ? 'إيقاف' : 'تفعيل'}
+          </button>
+          <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">حذف</button>
+        </div>
+      )}
     </div>
   )
 }

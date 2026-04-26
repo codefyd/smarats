@@ -4,34 +4,27 @@ import { supabase } from '../lib/supabase'
 import { useAuth } from '../contexts/AuthContext'
 import DashboardLayout from '../components/DashboardLayout'
 
+const PLAN_LABELS = {
+  plus: 'بلس',
+  pro: 'برو',
+  max: 'ماكس',
+  premium: 'بريميوم'
+}
+
 export default function DashboardPage() {
-  const { orgId, role } = useAuth()
-  const [org, setOrg] = useState(null)
+  const { orgId, role, org, canEdit } = useAuth()
   const [stats, setStats] = useState({ screens: 0, playlists: 0, items: 0 })
   const [loading, setLoading] = useState(true)
 
   useEffect(() => {
-    if (!orgId) {
-      setLoading(false)
-      return
-    }
+    if (!orgId) { setLoading(false); return }
 
     async function loadData() {
-      // جلب بيانات الجهة
-      const { data: orgData } = await supabase
-        .from('organizations')
-        .select('*')
-        .eq('id', orgId)
-        .single()
-      setOrg(orgData)
-
-      // الإحصائيات
       const [screens, playlists] = await Promise.all([
         supabase.from('screens').select('id', { count: 'exact', head: true }).eq('organization_id', orgId),
         supabase.from('playlists').select('id', { count: 'exact', head: true }).eq('organization_id', orgId)
       ])
 
-      // عدد العناصر (عبر join)
       const { data: plIds } = await supabase.from('playlists').select('id').eq('organization_id', orgId)
       let itemsCount = 0
       if (plIds && plIds.length > 0) {
@@ -57,7 +50,6 @@ export default function DashboardPage() {
     return <DashboardLayout><div className="text-center py-12 text-slate-500">جاري التحميل...</div></DashboardLayout>
   }
 
-  // السوبر أدمن بدون جهة
   if (role === 'super_admin' && !orgId) {
     return (
       <DashboardLayout>
@@ -76,43 +68,35 @@ export default function DashboardPage() {
 
   return (
     <DashboardLayout>
-      {/* رأس الصفحة */}
-      <div className="flex items-center justify-between mb-6">
+      <div className="flex items-center justify-between mb-6 gap-3 flex-wrap">
         <div>
           <h1 className="text-2xl font-bold">لوحة التحكم</h1>
-          <p className="text-sm text-slate-500 mt-1">{org.name}</p>
+          <p className="text-sm text-slate-500 mt-1">
+            {org.name}
+            {org.plan && <span className="mx-2">·</span>}
+            {org.plan && <span className="badge badge-blue text-xs">{PLAN_LABELS[org.plan]}</span>}
+          </p>
         </div>
         <StatusBadge status={org.status} />
       </div>
 
-      {/* تنبيه الجهة المعلقة */}
-      {org.status === 'pending' && (
-        <div className="mb-6 p-4 rounded-xl bg-yellow-50 border border-yellow-200">
-          <div className="font-bold text-yellow-800 mb-1">⏳ جهتك بانتظار الموافقة</div>
-          <p className="text-sm text-yellow-700">لن تتمكن من إضافة شاشات أو قوائم عرض حتى تتم الموافقة على جهتك من الإدارة.</p>
-        </div>
-      )}
-
-      {org.status === 'suspended' && (
-        <div className="mb-6 p-4 rounded-xl bg-red-50 border border-red-200">
-          <div className="font-bold text-red-800 mb-1">🚫 جهتك معلّقة</div>
-          <p className="text-sm text-red-700">تم تعليق حسابك. تواصل مع الإدارة لمعرفة التفاصيل.</p>
-        </div>
-      )}
-
-      {/* الإحصائيات */}
       <div className="grid grid-cols-3 gap-3 mb-8">
         <StatCard label="الشاشات" value={stats.screens} />
         <StatCard label="قوائم العرض" value={stats.playlists} />
         <StatCard label="إجمالي العناصر" value={stats.items} />
       </div>
 
-      {/* بطاقات الإجراءات */}
       <div className="grid md:grid-cols-3 gap-4">
-        <ActionCard to="/dashboard/screens" icon="📺" title="إدارة الشاشات" desc="إنشاء، ربط، وتوليد روابط" disabled={org.status !== 'active'} />
-        <ActionCard to="/dashboard/playlists" icon="📋" title="قوائم العرض" desc="إضافة صور وفيديوهات" disabled={org.status !== 'active'} />
-        <ActionCard to="/dashboard/settings" icon="⚙️" title="الإعدادات" desc="اسم الجهة، معلومات التواصل" />
+        <ActionCard to="/dashboard/screens" icon="📺" title="إدارة الشاشات" desc="إنشاء، ربط، وتوليد روابط" />
+        <ActionCard to="/dashboard/playlists" icon="📋" title="قوائم العرض" desc="إضافة صور وفيديوهات" />
+        <ActionCard to="/dashboard/settings" icon="⚙️" title="الإعدادات" desc="بيانات الجهة والاشتراك" />
       </div>
+
+      {!canEdit && (
+        <p className="text-xs text-slate-500 mt-6 text-center">
+          الإضافة والتعديل غير متاحة حالياً — فقط العرض
+        </p>
+      )}
     </DashboardLayout>
   )
 }
@@ -136,13 +120,14 @@ function StatCard({ label, value }) {
   )
 }
 
-function ActionCard({ to, icon, title, desc, disabled }) {
-  const content = (
-    <div className={`card hover:border-brand-300 transition cursor-pointer ${disabled ? 'opacity-50 pointer-events-none' : ''}`}>
-      <div className="text-3xl mb-3">{icon}</div>
-      <div className="font-bold mb-1">{title}</div>
-      <div className="text-sm text-slate-500">{desc}</div>
-    </div>
+function ActionCard({ to, icon, title, desc }) {
+  return (
+    <Link to={to}>
+      <div className="card hover:border-brand-300 transition cursor-pointer">
+        <div className="text-3xl mb-3">{icon}</div>
+        <div className="font-bold mb-1">{title}</div>
+        <div className="text-sm text-slate-500">{desc}</div>
+      </div>
+    </Link>
   )
-  return disabled ? content : <Link to={to}>{content}</Link>
 }

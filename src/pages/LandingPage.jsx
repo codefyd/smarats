@@ -125,14 +125,14 @@ function Hero() {
           color: '#fff',
           letterSpacing: '-1.5px'
         }}>
-          شــغّــل شــاشــاتــك<br />
+          شغّـل شـاشاتك<br />
           <span style={{
             background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
             backgroundClip: 'text'
           }}>
-            بــرابــط واحـــد
+            بـرابــط واحـــد
           </span>
         </h1>
       </FadeIn>

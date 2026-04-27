@@ -217,39 +217,51 @@ function Hero() {
             animation: 'smaratsPulse 2s ease-in-out infinite'
           }} />
           <span style={{ fontSize: 13, fontWeight: 600, color: C.accent, letterSpacing: 0.4 }}>
-            منصة عربية لإدارة شاشات العرض الذكية
+            منصة سمارتس لإدارة شاشات العرض
           </span>
         </div>
       </FadeIn>
 
-      <FadeIn delay={100} visible={visible}>
-        <h1 style={{
-          fontSize: 'clamp(34px, 5.5vw, 60px)',
-          fontWeight: 900, lineHeight: 1.2,
-          marginBottom: 22, color: '#fff', letterSpacing: '-1.2px'
-        }}>
-          شاشاتك التسويقية تعمل تلقائيًا…
-          <br />
-          <span style={{
-            background: `linear-gradient(90deg, ${C.primary}, ${C.accent})`,
-            WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
-            backgroundClip: 'text'
-          }}>
-            حتى بعد الإطفـاء
-                </span>
-        </h1>
-      </FadeIn>
+     <FadeIn delay={100} visible={visible}>
+  <h1 style={{
+    fontSize: 'clamp(34px, 5.5vw, 60px)',
+    fontWeight: 900,
+    lineHeight: 1.28,
+    marginBottom: 26,
+    color: '#fff',
+    letterSpacing: '-1.2px'
+  }}>
+    شاشاتك التسويقية تعمل تلقائيًا…
+    <br />
+    <span style={{
+      display: 'inline-block',
+      paddingBottom: 8,
+      background: `linear-gradient(90deg, ${C.primary}, ${C.accent})`,
+      WebkitBackgroundClip: 'text',
+      WebkitTextFillColor: 'transparent',
+      backgroundClip: 'text'
+    }}>
+      حتى بعد الإطفـاء
+    </span>
+  </h1>
+</FadeIn>
 
-      <FadeIn delay={180} visible={visible}>
-        <p style={{
-          fontSize: 18, lineHeight: 1.85, color: C.muted,
-          maxWidth: 720, margin: '0 auto 36px', fontWeight: 400
-        }}>
-          سماراتس منصة سهلة لإدارة شاشات العرض للجهات والشركات والجمعيات.
-          أضف روابط الصور والفيديوهات، واربطها بالشاشة،
-          ودع العرض يعمل تلقائيًا كل مرة تفتح فيها الشاشة.
-        </p>
-      </FadeIn>
+<FadeIn delay={180} visible={visible}>
+  <p style={{
+    fontSize: 18,
+    lineHeight: 1.95,
+    color: C.muted,
+    maxWidth: 720,
+    margin: '0 auto 36px',
+    fontWeight: 400
+  }}>
+    سماراتس منصة سهلة لإدارة شاشات العرض للجهات والشركات والجمعيات.
+    <br />
+    أضف روابط الصور والفيديوهات، واربطها بالشاشة،
+    <br />
+    ودع العرض يعمل تلقائيًا كل مرة تفتح فيها الشاشة.
+  </p>
+</FadeIn>
 
       <FadeIn delay={260} visible={visible}>
         <div style={{ display: 'flex', gap: 14, justifyContent: 'center', flexWrap: 'wrap', marginBottom: 56 }}>
@@ -300,7 +312,7 @@ function HeroMockup() {
       bg: 'linear-gradient(135deg, #2a0a1a 0%, #401224 100%)',
       tag: 'تنبيه',
       title: 'صلاة الجمعة بعد ١٥ دقيقة',
-      sub: 'الرجاء التهيؤ والتوجه للمسجد',
+      sub: 'الرجاء إغلاق الجوالات',
       icon: '⏰'
     },
     {
@@ -311,79 +323,153 @@ function HeroMockup() {
       icon: '✨'
     }
   ]
+
   const [i, setI] = useState(0)
+
   useEffect(() => {
     const t = setInterval(() => setI(s => (s + 1) % slides.length), 2800)
     return () => clearInterval(t)
   }, [])
+
   const s = slides[i]
 
   return (
-    <div style={{ position: 'relative', display: 'inline-block', maxWidth: '100%' }}>
+    <div style={{
+      position: 'relative',
+      width: '100%',
+      maxWidth: 860,
+      margin: '0 auto',
+      boxSizing: 'border-box'
+    }}>
       <div style={{
-        position: 'absolute', inset: -40, borderRadius: '50%',
+        position: 'absolute',
+        inset: -30,
+        borderRadius: '50%',
         background: 'radial-gradient(ellipse, rgba(2,132,199,0.22) 0%, transparent 70%)',
         pointerEvents: 'none'
       }} />
+
       <div style={{
+        position: 'relative',
         background: 'linear-gradient(145deg, #1a2d4a, #0f1e35)',
         border: '1px solid rgba(2,132,199,0.3)',
-        borderRadius: 22, padding: 4,
+        borderRadius: 22,
+        padding: 4,
         boxShadow: '0 30px 90px rgba(0,0,0,0.55), inset 0 1px 0 rgba(255,255,255,0.08)',
-        maxWidth: 820, width: '100%',
+        width: '100%',
+        boxSizing: 'border-box',
         animation: 'smaratsFloat 6s ease-in-out infinite'
       }}>
         <div style={{
           background: 'rgba(8,18,32,0.92)',
           borderRadius: '18px 18px 0 0',
           padding: '10px 16px',
-          display: 'flex', alignItems: 'center', gap: 12,
-          borderBottom: '1px solid rgba(2,132,199,0.12)'
+          display: 'flex',
+          alignItems: 'center',
+          gap: 12,
+          borderBottom: '1px solid rgba(2,132,199,0.12)',
+          boxSizing: 'border-box'
         }}>
-          <div style={{ display: 'flex', gap: 6 }}>
-            <Dot color="#ff5f57" /><Dot color="#febc2e" /><Dot color="#28c840" />
+          <div style={{ display: 'flex', gap: 6, flexShrink: 0 }}>
+            <Dot color="#ff5f57" />
+            <Dot color="#febc2e" />
+            <Dot color="#28c840" />
           </div>
+
           <div style={{
-            flex: 1, background: 'rgba(255,255,255,0.06)', borderRadius: 6,
-            padding: '4px 12px', fontSize: 11, color: '#4a7a9b',
-            textAlign: 'left', direction: 'ltr'
+            flex: 1,
+            minWidth: 0,
+            background: 'rgba(255,255,255,0.06)',
+            borderRadius: 6,
+            padding: '4px 12px',
+            fontSize: 11,
+            color: '#4a7a9b',
+            textAlign: 'left',
+            direction: 'ltr',
+            overflow: 'hidden',
+            whiteSpace: 'nowrap',
+            textOverflow: 'ellipsis'
           }}>
             smarats.app/s/<span style={{ color: C.accent }}>Ab3Xm2Kp</span>
           </div>
         </div>
+
         <div style={{
-          background: '#000', borderRadius: '0 0 18px 18px',
-          aspectRatio: '16/8', overflow: 'hidden', position: 'relative'
+          background: '#000',
+          borderRadius: '0 0 18px 18px',
+          aspectRatio: '16 / 9',
+          overflow: 'hidden',
+          position: 'relative',
+          width: '100%',
+          boxSizing: 'border-box'
         }}>
           <div style={{
-            position: 'absolute', inset: 0, background: s.bg,
+            position: 'absolute',
+            inset: 0,
+            background: s.bg,
             transition: 'background 0.8s ease',
-            display: 'flex', flexDirection: 'column',
-            alignItems: 'center', justifyContent: 'center',
-            textAlign: 'center', padding: 28
+            display: 'flex',
+            flexDirection: 'column',
+            alignItems: 'center',
+            justifyContent: 'center',
+            textAlign: 'center',
+            padding: 'clamp(16px, 4vw, 34px)',
+            boxSizing: 'border-box'
           }}>
             <div style={{
               display: 'inline-block',
               background: 'rgba(255,255,255,0.12)',
               border: '1px solid rgba(255,255,255,0.18)',
-              borderRadius: 20, padding: '4px 14px',
-              fontSize: 12, fontWeight: 700, color: '#fff',
-              marginBottom: 16, letterSpacing: 0.5
+              borderRadius: 20,
+              padding: '4px 14px',
+              fontSize: 'clamp(10px, 1.6vw, 12px)',
+              fontWeight: 700,
+              color: '#fff',
+              marginBottom: 'clamp(10px, 2vw, 16px)',
+              letterSpacing: 0.5
             }}>
               {s.tag}
             </div>
-            <div style={{ fontSize: 44, marginBottom: 12 }}>{s.icon}</div>
+
             <div style={{
-              fontSize: 'clamp(20px, 3vw, 30px)', fontWeight: 900,
-              color: '#fff', marginBottom: 8, letterSpacing: -0.5
+              fontSize: 'clamp(30px, 6vw, 44px)',
+              marginBottom: 'clamp(8px, 1.8vw, 12px)',
+              lineHeight: 1
+            }}>
+              {s.icon}
+            </div>
+
+            <div style={{
+              fontSize: 'clamp(18px, 3.5vw, 30px)',
+              fontWeight: 900,
+              color: '#fff',
+              marginBottom: 8,
+              letterSpacing: -0.5,
+              lineHeight: 1.25,
+              maxWidth: '92%'
             }}>
               {s.title}
             </div>
-            <div style={{ fontSize: 14, color: 'rgba(255,255,255,0.7)' }}>{s.sub}</div>
-            <div style={{ display: 'flex', gap: 6, marginTop: 22 }}>
+
+            <div style={{
+              fontSize: 'clamp(12px, 2vw, 14px)',
+              color: 'rgba(255,255,255,0.72)',
+              lineHeight: 1.6,
+              maxWidth: '92%'
+            }}>
+              {s.sub}
+            </div>
+
+            <div style={{
+              display: 'flex',
+              gap: 6,
+              marginTop: 'clamp(14px, 3vw, 22px)'
+            }}>
               {slides.map((_, k) => (
                 <div key={k} style={{
-                  width: k === i ? 22 : 6, height: 6, borderRadius: 3,
+                  width: k === i ? 22 : 6,
+                  height: 6,
+                  borderRadius: 3,
                   background: k === i ? C.accent : 'rgba(255,255,255,0.25)',
                   transition: 'all 0.4s'
                 }} />
@@ -392,9 +478,13 @@ function HeroMockup() {
           </div>
         </div>
       </div>
+
       <div style={{
-        width: 90, height: 7, background: 'rgba(2,132,199,0.3)',
-        margin: '0 auto', borderRadius: '0 0 4px 4px'
+        width: 90,
+        height: 7,
+        background: 'rgba(2,132,199,0.3)',
+        margin: '0 auto',
+        borderRadius: '0 0 4px 4px'
       }} />
     </div>
   )
@@ -417,9 +507,15 @@ function ProblemSection() {
   return (
     <Section maxWidth={1100}>
       <SectionTitle
-        badge="المشكلة"
-        title="المشكلة ليست في الشاشة… المشكلة في تشغيل المحتوى كل مرة"
-      />
+  badge="المشكلة"
+  title={
+    <>
+      المشكلة ليست في الشاشة…
+      <br />
+      المشكلة في تشغيل المحتوى كل مرة
+    </>
+  }
+/>
       <div style={{
         display: 'grid',
         gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))',

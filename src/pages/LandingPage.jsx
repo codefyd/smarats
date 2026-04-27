@@ -125,14 +125,14 @@ function Hero() {
           color: '#fff',
           letterSpacing: '-1.5px'
         }}>
-          شغّل شاشاتك<br />
+          شــغّــل شــاشــاتــك<br />
           <span style={{
             background: 'linear-gradient(90deg, #0284c7, #38bdf8)',
             WebkitBackgroundClip: 'text',
             WebkitTextFillColor: 'transparent',
             backgroundClip: 'text'
           }}>
-            برابط واحد
+            بــرابــط واحـــد
           </span>
         </h1>
       </FadeIn>
@@ -143,8 +143,8 @@ function Hero() {
           fontSize: 18, lineHeight: 1.75, color: '#94b8d4',
           maxWidth: 600, margin: '0 auto 40px', fontWeight: 400
         }}>
-          إدارة محتوى شاشات العرض بدون برامج أو تقنيين — الصق روابط
-          الصور والفيديوهات، وشاشاتك تبدأ العرض تلقائياً بعد أي إطفاء.
+          إدارة محتوى شاشات العرض بكل سهولة
+          وشاشاتك تبدأ العرض تلقائياً بعد أي إطفاء.
         </p>
       </FadeIn>
 

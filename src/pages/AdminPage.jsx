@@ -1,371 +1,428 @@
 import { useEffect, useState } from 'react'
+import { useParams, Link } from 'react-router-dom'
 import { supabase } from '../lib/supabase'
+import { useAuth } from '../contexts/AuthContext'
 import DashboardLayout from '../components/DashboardLayout'
+import { resolveMediaUrl, itemTypeLabel } from '../lib/urlUtils'
 
-const PLAN_LABELS = {
-  plus: 'بلس (5/5)',
-  pro: 'برو (10/10)',
-  max: 'ماكس (20/20)',
-  premium: 'بريميوم (لا محدود)'
-}
-
-const PLAN_LIMITS = {
-  plus: { screens: 5, playlists: 5 },
-  pro: { screens: 10, playlists: 10 },
-  max: { screens: 20, playlists: 20 },
-  premium: { screens: -1, playlists: -1 }
-}
-
-function formatDate(dateStr) {
-  if (!dateStr) return '—'
-  try {
-    return new Date(dateStr).toLocaleDateString('ar-SA-u-ca-gregory', {
-      year: 'numeric', month: 'short', day: 'numeric'
-    })
-  } catch { return dateStr }
-}
-
-function defaultEndDate(months = 12) {
-  const d = new Date()
-  d.setMonth(d.getMonth() + months)
-  return d.toISOString().slice(0, 10)
-}
-
-export default function AdminPage() {
-  const [orgs, setOrgs] = useState([])
-  const [stats, setStats] = useState({ total: 0, pending: 0, active: 0, suspended: 0, screens: 0, items: 0 })
+export default function PlaylistEditorPage() {
+  const { id } = useParams()
+  const { canEdit } = useAuth()
+  const [playlist, setPlaylist] = useState(null)
+  const [items, setItems] = useState([])
   const [loading, setLoading] = useState(true)
-  const [filter, setFilter] = useState('all')
-  const [modalOrg, setModalOrg] = useState(null)  // الجهة المفتوحة في نافذة التحكم
+
+  // نموذج إضافة
+  const [url, setUrl] = useState('')
+  const [title, setTitle] = useState('')
+  const [duration, setDuration] = useState(10)
+  const [driveHint, setDriveHint] = useState('image')
+  const [preview, setPreview] = useState(null)
+  const [adding, setAdding] = useState(false)
 
   async function load() {
     setLoading(true)
-    const { data: orgsData } = await supabase
-      .from('organizations')
-      .select('*')
-      .order('created_at', { ascending: false })
 
-    setOrgs(orgsData || [])
-
-    const [screens, items] = await Promise.all([
-      supabase.from('screens').select('id', { count: 'exact', head: true }),
-      supabase.from('playlist_items').select('id', { count: 'exact', head: true })
+    const [{ data: pl, error: plError }, { data: it, error: itError }] = await Promise.all([
+      supabase.from('playlists').select('*').eq('id', id).single(),
+      supabase.from('playlist_items').select('*').eq('playlist_id', id).order('order_index', { ascending: true })
     ])
 
-    const total = orgsData?.length || 0
-    const pending = orgsData?.filter(o => o.status === 'pending').length || 0
-    const active = orgsData?.filter(o => o.status === 'active').length || 0
-    const suspended = orgsData?.filter(o => o.status === 'suspended').length || 0
+    if (plError) alert('خطأ في تحميل القائمة: ' + plError.message)
+    if (itError) alert('خطأ في تحميل العناصر: ' + itError.message)
 
-    setStats({
-      total, pending, active, suspended,
-      screens: screens.count || 0,
-      items: items.count || 0
-    })
-
+    setPlaylist(pl || null)
+    setItems(it || [])
     setLoading(false)
   }
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [id])
 
-  async function setStatus(orgId, status) {
-    const { error } = await supabase.rpc('set_organization_status', { _org_id: orgId, _status: status })
-    if (error) return alert('خطأ: ' + error.message)
-    load()
+  useEffect(() => {
+    if (!url.trim()) { setPreview(null); return }
+    const resolved = resolveMediaUrl(url, url.includes('drive.google.com') ? driveHint : null)
+    setPreview(resolved)
+  }, [url, driveHint])
+
+  async function addItem(e) {
+    e.preventDefault()
+    if (!preview || preview.error) {
+      alert('تأكد من صحة الرابط')
+      return
+    }
+
+    setAdding(true)
+    const maxOrder = items.length > 0 ? Math.max(...items.map(i => i.order_index ?? 0)) : -1
+
+    const payload = {
+      playlist_id: id,
+      title: title.trim() || null,
+      original_url: url.trim(),
+      resolved_url: preview.resolvedUrl,
+      item_type: preview.type,
+      duration_seconds: Number(duration),
+      order_index: maxOrder + 1
+    }
+
+    const { data, error } = await supabase
+      .from('playlist_items')
+      .insert(payload)
+      .select('*')
+      .single()
+
+    setAdding(false)
+
+    if (error) {
+      alert('خطأ: ' + error.message)
+      return
+    }
+
+    setItems(prev => [...prev, data])
+    setUrl('')
+    setTitle('')
+    setDuration(10)
+    setDriveHint('image')
+    setPreview(null)
   }
 
-  const filteredOrgs = filter === 'all' ? orgs : orgs.filter(o => o.status === filter)
+  async function deleteItem(itemId) {
+    if (!confirm('حذف هذا العنصر؟')) return
+    const oldItems = items
+    setItems(prev => prev.filter(i => i.id !== itemId))
+    const { error } = await supabase.from('playlist_items').delete().eq('id', itemId)
+    if (error) {
+      setItems(oldItems)
+      alert('خطأ: ' + error.message)
+    }
+  }
+
+  async function moveItem(itemId, direction) {
+    const idx = items.findIndex(i => i.id === itemId)
+    const targetIdx = direction === 'up' ? idx - 1 : idx + 1
+    if (idx < 0 || targetIdx < 0 || targetIdx >= items.length) return
+
+    const current = items[idx]
+    const target = items[targetIdx]
+
+    const swapped = [...items]
+    swapped[idx] = { ...target, order_index: current.order_index }
+    swapped[targetIdx] = { ...current, order_index: target.order_index }
+    setItems(swapped)
+
+    const { error: err1 } = await supabase
+      .from('playlist_items')
+      .update({ order_index: target.order_index })
+      .eq('id', current.id)
+
+    const { error: err2 } = await supabase
+      .from('playlist_items')
+      .update({ order_index: current.order_index })
+      .eq('id', target.id)
+
+    if (err1 || err2) {
+      alert('تعذر تحديث الترتيب')
+      load()
+    }
+  }
+
+  async function updateDuration(itemId, newDuration) {
+    const numericDuration = Number(newDuration)
+    if (!numericDuration || numericDuration < 3 || numericDuration > 300) {
+      alert('المدة يجب أن تكون بين 3 و 300 ثانية')
+      return
+    }
+
+    const oldItems = items
+    setItems(prev => prev.map(i => i.id === itemId ? { ...i, duration_seconds: numericDuration } : i))
+
+    const { error } = await supabase
+      .from('playlist_items')
+      .update({ duration_seconds: numericDuration })
+      .eq('id', itemId)
+
+    if (error) {
+      setItems(oldItems)
+      alert('خطأ: ' + error.message)
+    }
+  }
+
+  if (loading) {
+    return <DashboardLayout><div className="text-center py-12 text-slate-500">جاري التحميل...</div></DashboardLayout>
+  }
+
+  if (!playlist) {
+    return <DashboardLayout><div className="text-center py-12 text-slate-500">القائمة غير موجودة</div></DashboardLayout>
+  }
 
   return (
     <DashboardLayout>
-      <div className="mb-6">
-        <div className="badge badge-blue mb-2">سوبر أدمن</div>
-        <h1 className="text-2xl font-bold">لوحة الإشراف العامة</h1>
+      <Link to="/dashboard/playlists" className="text-sm text-slate-500 hover:text-slate-700 mb-3 inline-block">
+        ← العودة للقوائم
+      </Link>
+
+      <div className="mb-5">
+        <h1 className="text-2xl font-bold">{playlist.name}</h1>
+        <p className="text-sm text-slate-500 mt-1">{items.length} عنصر</p>
       </div>
 
-      <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-6">
-        <StatCard label="إجمالي الجهات" value={stats.total} />
-        <StatCard label="بانتظار الموافقة" value={stats.pending} accent={stats.pending > 0 ? 'warning' : null} />
-        <StatCard label="الشاشات" value={stats.screens} />
-        <StatCard label="العناصر" value={stats.items} />
-      </div>
-
-      <div className="flex gap-2 mb-4 overflow-x-auto">
-        <FilterBtn active={filter === 'all'} onClick={() => setFilter('all')}>الكل ({stats.total})</FilterBtn>
-        <FilterBtn active={filter === 'pending'} onClick={() => setFilter('pending')}>بانتظار ({stats.pending})</FilterBtn>
-        <FilterBtn active={filter === 'active'} onClick={() => setFilter('active')}>نشطة ({stats.active})</FilterBtn>
-        <FilterBtn active={filter === 'suspended'} onClick={() => setFilter('suspended')}>معلّقة ({stats.suspended})</FilterBtn>
-      </div>
-
-      {loading ? (
-        <div className="text-center py-12 text-slate-500">جاري التحميل...</div>
-      ) : filteredOrgs.length === 0 ? (
-        <div className="card text-center py-10 text-slate-500">لا توجد جهات في هذا التصنيف</div>
-      ) : (
-        <div className="space-y-2">
-          {filteredOrgs.map(org => (
-            <OrgRow
-              key={org.id}
-              org={org}
-              onOpenManage={() => setModalOrg(org)}
-              onSetStatus={(s) => setStatus(org.id, s)}
-            />
-          ))}
+      {!canEdit && (
+        <div className="mb-5 p-3 rounded-lg bg-slate-100 text-slate-700 text-sm">
+          التعديل غير متاح حالياً. تقدر تشوف العناصر فقط.
         </div>
       )}
 
-      {modalOrg && (
-        <ManageOrgModal
-          org={modalOrg}
-          onClose={() => setModalOrg(null)}
-          onSaved={() => { setModalOrg(null); load() }}
-        />
+      {canEdit && (
+        <form onSubmit={addItem} className="card mb-5">
+          <h3 className="font-bold mb-4">إضافة عنصر جديد</h3>
+
+          <div className="space-y-3">
+            <div>
+              <label className="label">الرابط *</label>
+              <input
+                type="url"
+                required
+                value={url}
+                onChange={e => setUrl(e.target.value)}
+                className="input"
+                placeholder="الصق رابط صورة / درايف / يوتيوب / MP4"
+                dir="ltr"
+              />
+              <p className="text-xs text-slate-500 mt-1">يتم اكتشاف نوع الرابط تلقائياً</p>
+            </div>
+
+            {url.includes('drive.google.com') && (
+              <div>
+                <label className="label">نوع المحتوى من درايف</label>
+                <div className="flex gap-4">
+                  <label className="flex items-center gap-2">
+                    <input type="radio" value="image" checked={driveHint === 'image'} onChange={e => setDriveHint(e.target.value)} />
+                    <span>صورة</span>
+                  </label>
+                  <label className="flex items-center gap-2">
+                    <input type="radio" value="video" checked={driveHint === 'video'} onChange={e => setDriveHint(e.target.value)} />
+                    <span>فيديو</span>
+                  </label>
+                </div>
+              </div>
+            )}
+
+            <div className="grid grid-cols-2 gap-3">
+              <div>
+                <label className="label">العنوان (اختياري)</label>
+                <input type="text" value={title} onChange={e => setTitle(e.target.value)} className="input" placeholder="وصف قصير" />
+              </div>
+              <div>
+                <label className="label">المدة بالثواني</label>
+                <input type="number" min={3} max={300} value={duration} onChange={e => setDuration(e.target.value)} className="input" />
+              </div>
+            </div>
+
+            {preview && !preview.error && (
+              <div className="p-3 bg-slate-50 rounded-lg text-sm">
+                <div className="mb-1">
+                  <span className="font-medium">النوع المكتشف: </span>
+                  <span className="badge badge-blue">{itemTypeLabel(preview.type)}</span>
+                </div>
+                <div className="text-xs text-slate-500 break-all" dir="ltr">{preview.resolvedUrl}</div>
+              </div>
+            )}
+
+            {preview?.error && (
+              <div className="p-3 bg-red-50 text-red-700 rounded-lg text-sm">{preview.error}</div>
+            )}
+
+            <button type="submit" disabled={adding || !preview || !!preview.error} className="btn btn-primary">
+              {adding ? 'جاري الإضافة...' : 'إضافة'}
+            </button>
+          </div>
+        </form>
+      )}
+
+      {items.length === 0 ? (
+        <div className="card text-center py-10">
+          <div className="text-5xl mb-3">🎞️</div>
+          <h3 className="font-bold mb-1">لا توجد عناصر بعد</h3>
+          {canEdit && <p className="text-sm text-slate-500">ابدأ بإضافة رابط من النموذج أعلاه</p>}
+        </div>
+      ) : (
+        <div className="space-y-2">
+          {items.map((item, idx) => (
+            <ItemRow
+              key={item.id}
+              item={item}
+              index={idx}
+              isFirst={idx === 0}
+              isLast={idx === items.length - 1}
+              canEdit={canEdit}
+              onDelete={() => deleteItem(item.id)}
+              onMoveUp={() => moveItem(item.id, 'up')}
+              onMoveDown={() => moveItem(item.id, 'down')}
+              onDurationChange={d => updateDuration(item.id, d)}
+            />
+          ))}
+        </div>
       )}
     </DashboardLayout>
   )
 }
 
-function StatCard({ label, value, accent }) {
-  const accentClass = accent === 'warning' ? 'text-yellow-600' : ''
+function ItemThumbnail({ item }) {
+  const { item_type, resolved_url, original_url } = item
+
+  if (item_type === 'youtube') {
+    const match = (original_url || resolved_url || '').match(
+      /(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/
+    )
+    const vidId = match?.[1]
+    if (!vidId) return <ThumbFallback icon="▶️" />
+    return (
+      <div style={{
+        width: 72, height: 48, borderRadius: 8, overflow: 'hidden',
+        flexShrink: 0, position: 'relative', background: '#000'
+      }}>
+        <img
+          src={`https://img.youtube.com/vi/${vidId}/mqdefault.jpg`}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.style.display = 'none' }}
+        />
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.25)'
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.9)">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </div>
+      </div>
+    )
+  }
+
+  if (item_type === 'image') {
+    return (
+      <div style={{ width: 72, height: 48, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: '#f1f5f9' }}>
+        <img
+          src={resolved_url}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.parentElement.innerHTML = '<span style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px">🖼️</span>' }}
+        />
+      </div>
+    )
+  }
+
+  if (item_type === 'drive_image') {
+    return (
+      <div style={{ width: 72, height: 48, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: '#f1f5f9' }}>
+        <img
+          src={resolved_url}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.parentElement.innerHTML = '<span style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px">📁</span>' }}
+        />
+      </div>
+    )
+  }
+
+  if (item_type === 'drive_video') {
+    // نحاول نجيب ثمبنيل من Drive
+    const fileId = (original_url || '').match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] ||
+                   (original_url || '').match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1]
+    if (fileId) {
+      return (
+        <div style={{
+          width: 72, height: 48, borderRadius: 8, overflow: 'hidden',
+          flexShrink: 0, background: '#000', position: 'relative'
+        }}>
+          <img
+            src={`https://drive.google.com/thumbnail?id=${fileId}&sz=w200`}
+            alt=""
+            style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.8 }}
+            onError={e => { e.currentTarget.style.display = 'none' }}
+          />
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+          </div>
+        </div>
+      )
+    }
+    return <ThumbFallback icon="📹" />
+  }
+
+  if (item_type === 'mp4') {
+    return <ThumbFallback icon="🎬" />
+  }
+
+  return <ThumbFallback icon="📄" />
+}
+
+function ThumbFallback({ icon }) {
   return (
-    <div className="card">
-      <div className="text-sm text-slate-500 mb-1">{label}</div>
-      <div className={`text-3xl font-bold ${accentClass}`}>{value}</div>
+    <div style={{
+      width: 72, height: 48, borderRadius: 8,
+      background: '#f1f5f9', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+      fontSize: 22, flexShrink: 0,
+      border: '1px solid #e2e8f0'
+    }}>
+      {icon}
     </div>
   )
 }
 
-function FilterBtn({ active, onClick, children }) {
-  return (
-    <button
-      onClick={onClick}
-      className={`px-4 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap transition ${
-        active ? 'bg-brand-600 text-white' : 'bg-white text-slate-600 border border-slate-200 hover:bg-slate-50'
-      }`}
-    >
-      {children}
-    </button>
-  )
-}
+function ItemRow({ item, index, isFirst, isLast, canEdit, onDelete, onMoveUp, onMoveDown, onDurationChange }) {
+  const [editingDuration, setEditingDuration] = useState(false)
+  const [tempDuration, setTempDuration] = useState(item.duration_seconds)
 
-function OrgRow({ org, onOpenManage, onSetStatus }) {
-  const typeLabels = {
-    company: 'شركة', charity: 'جمعية خيرية',
-    government: 'مؤسسة حكومية', other: 'أخرى'
-  }
-
-  const statusBadge = {
-    pending: { label: 'بانتظار الموافقة', cls: 'badge-yellow' },
-    active: { label: 'نشطة', cls: 'badge-green' },
-    suspended: { label: 'معلّقة', cls: 'badge-red' }
-  }[org.status]
-
-  // حساب حالة الاشتراك بصرياً
-  let subInfo = null
-  if (org.status === 'active' && org.subscription_end_date) {
-    const today = new Date(); today.setHours(0,0,0,0)
-    const end = new Date(org.subscription_end_date)
-    const days = Math.ceil((end - today) / (1000*60*60*24))
-    if (days < 0) subInfo = { text: `منتهي منذ ${-days} يوم`, cls: 'text-red-600' }
-    else if (days <= 20) subInfo = { text: `ينتهي خلال ${days} يوم`, cls: 'text-amber-600' }
-    else subInfo = { text: `ينتهي ${formatDate(org.subscription_end_date)}`, cls: 'text-slate-500' }
-  }
+  useEffect(() => { setTempDuration(item.duration_seconds) }, [item.duration_seconds])
 
   return (
-    <div className="card">
-      <div className="flex items-start justify-between gap-3 mb-3">
-        <div className="flex-1 min-w-0">
-          <h3 className="font-bold">{org.name}</h3>
-          <div className="flex items-center gap-2 mt-1 text-sm text-slate-500 flex-wrap">
-            <span>{typeLabels[org.org_type] || org.org_type}</span>
-            <span>·</span>
-            <span>{formatDate(org.created_at)}</span>
-            {org.plan && (
-              <>
-                <span>·</span>
-                <span className="badge badge-blue text-xs">{PLAN_LABELS[org.plan]}</span>
-              </>
-            )}
-          </div>
-          {org.contact_info && (
-            <p className="text-xs text-slate-600 mt-1">📞 <span dir="ltr">{org.contact_info}</span></p>
-          )}
-          {subInfo && <p className={`text-xs mt-1 ${subInfo.cls}`}>{subInfo.text}</p>}
-        </div>
-        <span className={`badge ${statusBadge?.cls || 'badge-gray'}`}>{statusBadge?.label || org.status}</span>
-      </div>
+    <div className="card flex items-center gap-3 py-3">
+      <div className="text-slate-400 text-sm w-5 text-center shrink-0">{index + 1}</div>
 
-      <div className="flex gap-2 flex-wrap">
-        {org.status === 'pending' && (
-          <>
-            <button onClick={onOpenManage} className="btn btn-primary text-xs">✓ موافقة + تحديد باقة</button>
-            <button onClick={() => onSetStatus('suspended')} className="btn btn-danger text-xs">رفض</button>
-          </>
-        )}
-        {org.status === 'active' && (
-          <>
-            <button onClick={onOpenManage} className="btn btn-secondary text-xs">إدارة الباقة والاشتراك</button>
-            <button onClick={() => onSetStatus('suspended')} className="btn btn-danger text-xs">تعليق</button>
-          </>
-        )}
-        {org.status === 'suspended' && (
-          <>
-            <button onClick={onOpenManage} className="btn btn-primary text-xs">إعادة تفعيل + باقة</button>
-          </>
-        )}
-      </div>
-    </div>
-  )
-}
+      {/* ثمبنيل */}
+      <ItemThumbnail item={item} />
 
-function ManageOrgModal({ org, onClose, onSaved }) {
-  const isApproval = org.status !== 'active'
-  const [plan, setPlan] = useState(org.plan || 'pro')
-  const [endDate, setEndDate] = useState(
-    org.subscription_end_date || defaultEndDate(12)
-  )
-  const [saving, setSaving] = useState(false)
-  const [error, setError] = useState('')
-  const [counts, setCounts] = useState({ screens: 0, playlists: 0 })
-  const [loadingCounts, setLoadingCounts] = useState(true)
+      <div className="flex-1 min-w-0">
+        <div className="font-medium truncate text-sm">{item.title || item.original_url}</div>
 
-  useEffect(() => {
-    (async () => {
-      const [{ count: scrCount }, { count: plCount }] = await Promise.all([
-        supabase.from('screens').select('id', { count: 'exact', head: true }).eq('organization_id', org.id),
-        supabase.from('playlists').select('id', { count: 'exact', head: true }).eq('organization_id', org.id)
-      ])
-      setCounts({ screens: scrCount || 0, playlists: plCount || 0 })
-      setLoadingCounts(false)
-    })()
-  }, [org.id])
+        <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
+          <span className="badge badge-gray text-xs">{itemTypeLabel(item.item_type)}</span>
 
-  const limits = PLAN_LIMITS[plan]
-  const willDisableScreens =
-    limits.screens > 0 && counts.screens > limits.screens
-      ? counts.screens - limits.screens : 0
-  const playlistsExcess =
-    limits.playlists > 0 && counts.playlists > limits.playlists
-      ? counts.playlists - limits.playlists : 0
-
-  async function save() {
-    setError('')
-
-    const today = new Date(); today.setHours(0,0,0,0)
-    const end = new Date(endDate)
-    if (end <= today) {
-      setError('تاريخ نهاية الاشتراك يجب أن يكون في المستقبل')
-      return
-    }
-
-    setSaving(true)
-    try {
-      // عند الموافقة الأولى: نستخدم approve_organization_with_plan
-      // وإلا: نستخدم update_organization_plan
-      const rpcName = isApproval
-        ? 'approve_organization_with_plan'
-        : 'update_organization_plan'
-
-      const { data, error: rpcErr } = await supabase.rpc(rpcName, {
-        _org_id: org.id,
-        _plan: plan,
-        _end_date: endDate
-      })
-
-      if (rpcErr) throw rpcErr
-
-      // إذا تم تعطيل شاشات، نُعلم السوبر أدمن
-      if (data && data.screens_disabled > 0) {
-        alert(`تم حفظ التغييرات. تم تعطيل ${data.screens_disabled} شاشة لتجاوز حد الباقة الجديد.`)
-      }
-
-      onSaved()
-    } catch (err) {
-      setError(err.message || 'خطأ غير متوقع')
-    } finally {
-      setSaving(false)
-    }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/40 p-4" onClick={onClose}>
-      <div className="bg-white rounded-2xl shadow-xl max-w-md w-full max-h-[90vh] overflow-auto" onClick={e => e.stopPropagation()}>
-        <div className="p-5 border-b border-slate-100">
-          <h2 className="font-bold text-lg">{isApproval ? 'الموافقة على الجهة' : 'إدارة الاشتراك'}</h2>
-          <p className="text-xs text-slate-500 mt-1">{org.name}</p>
-        </div>
-
-        <div className="p-5 space-y-4">
-          <div>
-            <label className="label">الباقة</label>
-            <select value={plan} onChange={e => setPlan(e.target.value)} className="input">
-              <option value="plus">بلس — 5 شاشات + 5 قوائم عرض</option>
-              <option value="pro">برو — 10 شاشات + 10 قوائم عرض</option>
-              <option value="max">ماكس — 20 شاشة + 20 قائمة عرض</option>
-              <option value="premium">بريميوم — لا محدود (لا يُعرض للعملاء)</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="label">تاريخ نهاية الاشتراك</label>
+          {canEdit && editingDuration ? (
             <input
-              type="date"
-              value={endDate}
-              onChange={e => setEndDate(e.target.value)}
-              className="input"
-              min={new Date().toISOString().slice(0,10)}
-              dir="ltr"
+              type="number" min={3} max={300} value={tempDuration}
+              onChange={e => setTempDuration(e.target.value)}
+              onBlur={() => { onDurationChange(tempDuration); setEditingDuration(false) }}
+              onKeyDown={e => { if (e.key === 'Enter') e.target.blur() }}
+              autoFocus
+              className="w-20 px-2 py-0.5 text-xs border rounded"
             />
-            <div className="flex gap-2 mt-2">
-              <button type="button" onClick={() => setEndDate(defaultEndDate(1))} className="btn btn-ghost text-xs">شهر</button>
-              <button type="button" onClick={() => setEndDate(defaultEndDate(3))} className="btn btn-ghost text-xs">3 أشهر</button>
-              <button type="button" onClick={() => setEndDate(defaultEndDate(6))} className="btn btn-ghost text-xs">6 أشهر</button>
-              <button type="button" onClick={() => setEndDate(defaultEndDate(12))} className="btn btn-ghost text-xs">سنة</button>
-            </div>
-          </div>
-
-          {/* عرض الاستخدام الحالي والتأثير */}
-          {!loadingCounts && (
-            <div className="rounded-lg bg-slate-50 border border-slate-200 p-3 text-sm">
-              <div className="font-medium text-slate-700 mb-2">الاستخدام الحالي</div>
-              <div className="grid grid-cols-2 gap-2 text-xs">
-                <div>
-                  <span className="text-slate-500">الشاشات: </span>
-                  <span className="font-medium">
-                    {counts.screens} / {limits.screens === -1 ? '∞' : limits.screens}
-                  </span>
-                </div>
-                <div>
-                  <span className="text-slate-500">القوائم: </span>
-                  <span className="font-medium">
-                    {counts.playlists} / {limits.playlists === -1 ? '∞' : limits.playlists}
-                  </span>
-                </div>
-              </div>
-
-              {willDisableScreens > 0 && (
-                <div className="mt-2 p-2 rounded bg-amber-50 text-amber-800 text-xs">
-                  ⚠️ سيتم تعطيل {willDisableScreens} شاشة (الأحدث) تلقائياً عند الحفظ
-                </div>
-              )}
-              {playlistsExcess > 0 && (
-                <div className="mt-2 p-2 rounded bg-amber-50 text-amber-800 text-xs">
-                  ⚠️ يوجد {playlistsExcess} قائمة زائدة عن الحد. لن يستطيع العميل إضافة قوائم حتى يحذف الزائد.
-                </div>
-              )}
-            </div>
+          ) : canEdit ? (
+            <button onClick={() => setEditingDuration(true)} className="hover:text-slate-700">
+              {item.duration_seconds} ث
+            </button>
+          ) : (
+            <span>{item.duration_seconds} ث</span>
           )}
-
-          {error && <div className="p-2 rounded bg-red-50 text-red-700 text-xs">{error}</div>}
         </div>
 
-        <div className="p-5 border-t border-slate-100 flex justify-end gap-2">
-          <button onClick={onClose} className="btn btn-secondary">إلغاء</button>
-          <button onClick={save} disabled={saving} className="btn btn-primary">
-            {saving ? 'جاري الحفظ...' : (isApproval ? 'موافقة وتفعيل' : 'حفظ التغييرات')}
-          </button>
-        </div>
+        <div className="text-[11px] text-slate-400 truncate mt-1" dir="ltr">{item.resolved_url}</div>
       </div>
+
+      {canEdit && (
+        <div className="flex gap-1 shrink-0">
+          <button onClick={onMoveUp} disabled={isFirst} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↑</button>
+          <button onClick={onMoveDown} disabled={isLast} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↓</button>
+          <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">حذف</button>
+        </div>
+      )}
     </div>
   )
 }

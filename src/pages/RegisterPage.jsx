@@ -66,20 +66,37 @@ export default function RegisterPage() {
   }
 
   if (success) {
-    return (
-      <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
-        <div className="w-full max-w-md card text-center">
-          <div className="w-16 h-16 rounded-full bg-green-100 text-green-600 text-3xl flex items-center justify-center mx-auto mb-4">✓</div>
-          <h1 className="text-xl font-bold mb-2">تم التسجيل بنجاح</h1>
-          <p className="text-slate-600 mb-5 leading-relaxed">
-            جهتك الآن بانتظار موافقة الإدارة. سيتم تفعيل حسابك خلال فترة قصيرة،
-            وتقدر تسجل دخول مرة ثانية بعد الموافقة لتبدأ استخدام النظام.
-          </p>
-          <button onClick={() => navigate('/login')} className="btn btn-primary">العودة لصفحة الدخول</button>
-        </div>
+  return (
+    <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4">
+      <div className="w-full max-w-md card text-center">
+        <div className="w-16 h-16 rounded-full bg-green-100 text-green-600 text-3xl flex items-center justify-center mx-auto mb-4">✓</div>
+
+        <h1 className="text-xl font-bold mb-2">تم التسجيل بنجاح</h1>
+
+        <p className="text-slate-600 mb-5 leading-relaxed">
+          جهتك الآن بانتظار موافقة الإدارة. سيتم تفعيل حسابك خلال فترة قصيرة،
+          تقدر تسجل دخول مرة ثانية بعد الموافقة لتبدأ استخدام النظام.
+        </p>
+
+        <a
+          href="https://wa.me/966562848586"
+          target="_blank"
+          rel="noopener noreferrer"
+          className="btn btn-primary w-full mb-3"
+        >
+          التواصل مع الإدارة عبر الواتساب
+        </a>
+
+        <button
+          onClick={() => navigate('/login')}
+          className="btn btn-secondary w-full"
+        >
+          العودة لصفحة الدخول
+        </button>
       </div>
-    )
-  }
+    </div>
+  )
+}
 
   return (
     <div className="min-h-screen bg-slate-50 flex items-center justify-center p-4 py-10">

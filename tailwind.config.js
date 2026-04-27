@@ -4,7 +4,7 @@ export default {
   theme: {
     extend: {
       fontFamily: {
-        sans: ['Tajawal', 'system-ui', 'sans-serif']
+        sans: ['Thmanyah Sans', 'Tajawal', 'system-ui', 'sans-serif']
       },
       colors: {
         brand: {

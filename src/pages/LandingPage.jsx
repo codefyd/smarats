@@ -228,13 +228,15 @@ function Hero() {
           fontWeight: 900, lineHeight: 1.2,
           marginBottom: 22, color: '#fff', letterSpacing: '-1.2px'
         }}>
-          شاشاتك التسويقية تعمل تلقائيًا…<br />
+          شاشاتك التسويقية تعمل تلقائيًا…
+          <br />
           <span style={{
             background: `linear-gradient(90deg, ${C.primary}, ${C.accent})`,
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
             backgroundClip: 'text'
           }}>
             حتى بعد الإطفاء
+            
           </span>
         </h1>
       </FadeIn>

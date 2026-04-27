@@ -266,24 +266,131 @@ export default function PlaylistEditorPage() {
   )
 }
 
+function ItemThumbnail({ item }) {
+  const { item_type, resolved_url, original_url } = item
+
+  if (item_type === 'youtube') {
+    const match = (original_url || resolved_url || '').match(
+      /(?:v=|youtu\.be\/|embed\/)([a-zA-Z0-9_-]{11})/
+    )
+    const vidId = match?.[1]
+    if (!vidId) return <ThumbFallback icon="▶️" />
+    return (
+      <div style={{
+        width: 72, height: 48, borderRadius: 8, overflow: 'hidden',
+        flexShrink: 0, position: 'relative', background: '#000'
+      }}>
+        <img
+          src={`https://img.youtube.com/vi/${vidId}/mqdefault.jpg`}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.style.display = 'none' }}
+        />
+        <div style={{
+          position: 'absolute', inset: 0,
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          background: 'rgba(0,0,0,0.25)'
+        }}>
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="rgba(255,255,255,0.9)">
+            <polygon points="5 3 19 12 5 21 5 3" />
+          </svg>
+        </div>
+      </div>
+    )
+  }
+
+  if (item_type === 'image') {
+    return (
+      <div style={{ width: 72, height: 48, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: '#f1f5f9' }}>
+        <img
+          src={resolved_url}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.parentElement.innerHTML = '<span style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px">🖼️</span>' }}
+        />
+      </div>
+    )
+  }
+
+  if (item_type === 'drive_image') {
+    return (
+      <div style={{ width: 72, height: 48, borderRadius: 8, overflow: 'hidden', flexShrink: 0, background: '#f1f5f9' }}>
+        <img
+          src={resolved_url}
+          alt=""
+          style={{ width: '100%', height: '100%', objectFit: 'cover' }}
+          onError={e => { e.currentTarget.parentElement.innerHTML = '<span style="display:flex;align-items:center;justify-content:center;width:100%;height:100%;font-size:22px">📁</span>' }}
+        />
+      </div>
+    )
+  }
+
+  if (item_type === 'drive_video') {
+    // نحاول نجيب ثمبنيل من Drive
+    const fileId = (original_url || '').match(/\/d\/([a-zA-Z0-9_-]+)/)?.[1] ||
+                   (original_url || '').match(/[?&]id=([a-zA-Z0-9_-]+)/)?.[1]
+    if (fileId) {
+      return (
+        <div style={{
+          width: 72, height: 48, borderRadius: 8, overflow: 'hidden',
+          flexShrink: 0, background: '#000', position: 'relative'
+        }}>
+          <img
+            src={`https://drive.google.com/thumbnail?id=${fileId}&sz=w200`}
+            alt=""
+            style={{ width: '100%', height: '100%', objectFit: 'cover', opacity: 0.8 }}
+            onError={e => { e.currentTarget.style.display = 'none' }}
+          />
+          <div style={{
+            position: 'absolute', inset: 0,
+            display: 'flex', alignItems: 'center', justifyContent: 'center'
+          }}>
+            <svg width="18" height="18" viewBox="0 0 24 24" fill="rgba(255,255,255,0.85)">
+              <polygon points="5 3 19 12 5 21 5 3" />
+            </svg>
+          </div>
+        </div>
+      )
+    }
+    return <ThumbFallback icon="📹" />
+  }
+
+  if (item_type === 'mp4') {
+    return <ThumbFallback icon="🎬" />
+  }
+
+  return <ThumbFallback icon="📄" />
+}
+
+function ThumbFallback({ icon }) {
+  return (
+    <div style={{
+      width: 72, height: 48, borderRadius: 8,
+      background: '#f1f5f9', display: 'flex',
+      alignItems: 'center', justifyContent: 'center',
+      fontSize: 22, flexShrink: 0,
+      border: '1px solid #e2e8f0'
+    }}>
+      {icon}
+    </div>
+  )
+}
+
 function ItemRow({ item, index, isFirst, isLast, canEdit, onDelete, onMoveUp, onMoveDown, onDurationChange }) {
   const [editingDuration, setEditingDuration] = useState(false)
   const [tempDuration, setTempDuration] = useState(item.duration_seconds)
 
   useEffect(() => { setTempDuration(item.duration_seconds) }, [item.duration_seconds])
 
-  const typeIcons = {
-    image: '🖼️', youtube: '▶️',
-    drive_image: '📁', drive_video: '📹', mp4: '🎬'
-  }
-
   return (
     <div className="card flex items-center gap-3 py-3">
-      <div className="text-slate-400 text-sm w-6 text-center">{index + 1}</div>
-      <div className="text-2xl">{typeIcons[item.item_type] || '📄'}</div>
+      <div className="text-slate-400 text-sm w-5 text-center shrink-0">{index + 1}</div>
+
+      {/* ثمبنيل */}
+      <ItemThumbnail item={item} />
 
       <div className="flex-1 min-w-0">
-        <div className="font-medium truncate">{item.title || item.original_url}</div>
+        <div className="font-medium truncate text-sm">{item.title || item.original_url}</div>
 
         <div className="text-xs text-slate-500 flex items-center gap-2 mt-0.5 flex-wrap">
           <span className="badge badge-gray text-xs">{itemTypeLabel(item.item_type)}</span>
@@ -310,7 +417,7 @@ function ItemRow({ item, index, isFirst, isLast, canEdit, onDelete, onMoveUp, on
       </div>
 
       {canEdit && (
-        <div className="flex gap-1">
+        <div className="flex gap-1 shrink-0">
           <button onClick={onMoveUp} disabled={isFirst} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↑</button>
           <button onClick={onMoveDown} disabled={isLast} className="btn btn-ghost text-xs px-2 disabled:opacity-30">↓</button>
           <button onClick={onDelete} className="btn btn-ghost text-xs text-red-600">حذف</button>

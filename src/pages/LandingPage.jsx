@@ -235,9 +235,8 @@ function Hero() {
             WebkitBackgroundClip: 'text', WebkitTextFillColor: 'transparent',
             backgroundClip: 'text'
           }}>
-            حتى بعد الإطفاء
-            
-          </span>
+            حتى بعد الإطفــاء
+                </span>
         </h1>
       </FadeIn>
 

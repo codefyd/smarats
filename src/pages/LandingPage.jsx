@@ -15,7 +15,7 @@ export default function LandingPage() {
         minHeight: '100vh',
         background: 'linear-gradient(160deg, #0a1628 0%, #0d1f3c 50%, #081420 100%)',
         color: '#e8f4fd',
-        fontFamily: 'Tajawal, system-ui, sans-serif',
+        fontFamily: 'Thmanyah Sans, Tajawal, system-ui, sans-serif',
         overflowX: 'hidden'
       }}
     >

@@ -21,8 +21,8 @@ import {
 //   - عند أي تغيير: نعيد لـ 10 ثوانٍ
 // ============================================================================
 const POLL_FAST = 10_000   // 10s
-const POLL_MED = 30_000    // 3000s
-const POLL_SLOW = 60_000   // 6000s
+const POLL_MED = 30_000    // 30s
+const POLL_SLOW = 60_000   // 60s
 const STEP_TO_MED = 6      // 6 × 10s = دقيقة
 const STEP_TO_SLOW = 30    // 30 × 10s/30s متراكم
 
@@ -128,6 +128,51 @@ function getCachableUrls(items) {
     .filter(Boolean)
 }
 
+// ============================================================================
+// Snapshot — تخزين آخر state ناجح في localStorage
+// يسمح بالعرض من الكاش لو فشل التحميل الأول (offline-first)
+// ============================================================================
+const SNAPSHOT_TTL_MS = 7 * 24 * 60 * 60 * 1000 // أسبوع
+
+function snapshotKey(publicId) {
+  return `smarats_snapshot_${publicId}`
+}
+
+function saveSnapshot(publicId, payload) {
+  try {
+    const data = {
+      ...payload,
+      _saved_at: Date.now()
+    }
+    localStorage.setItem(snapshotKey(publicId), JSON.stringify(data))
+  } catch (_) {
+    // قد يفشل في وضع private browsing أو امتلاء storage
+  }
+}
+
+function loadSnapshot(publicId) {
+  try {
+    const raw = localStorage.getItem(snapshotKey(publicId))
+    if (!raw) return null
+    const data = JSON.parse(raw)
+    if (!data || !data._saved_at) return null
+    // فحص الصلاحية (لا نستخدم snapshot أقدم من أسبوع)
+    if (Date.now() - data._saved_at > SNAPSHOT_TTL_MS) {
+      localStorage.removeItem(snapshotKey(publicId))
+      return null
+    }
+    return data
+  } catch (_) {
+    return null
+  }
+}
+
+function clearSnapshot(publicId) {
+  try {
+    localStorage.removeItem(snapshotKey(publicId))
+  } catch (_) {}
+}
+
 function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
   useEffect(() => {
     const video = videoRef?.current
@@ -198,6 +243,8 @@ export default function PlayerPage() {
   const [items, setItems] = useState([])
   const [currentIdx, setCurrentIdx] = useState(0)
   const [activeLayer, setActiveLayer] = useState('a')
+  const [isOffline, setIsOffline] = useState(false)
+  const [offlineSince, setOfflineSince] = useState(null)
   const [layerAItem, setLayerAItem] = useState(null)
   const [layerBItem, setLayerBItem] = useState(null)
 
@@ -395,18 +442,21 @@ export default function PlayerPage() {
         setStatus('error')
         setErrorKind('inactive')
         setErrorMsg('الشاشة متوقفة حالياً')
+        clearSnapshot(publicId)
         return { changed: false }
       }
       if (!data.org_active) {
         setStatus('error')
         setErrorKind('inactive')
         setErrorMsg('الجهة غير نشطة')
+        clearSnapshot(publicId)
         return { changed: false }
       }
       if (!data.subscription_active) {
         setStatus('error')
         setErrorKind('expired')
         setErrorMsg('الاشتراك منتهي')
+        clearSnapshot(publicId)
         return { changed: false }
       }
 
@@ -444,6 +494,16 @@ export default function PlayerPage() {
       }
 
       const nextItems = itemsData.map(normalizePlayableItem)
+
+      // ============== حفظ snapshot للاستعادة لاحقاً (offline-first) ==============
+      saveSnapshot(publicId, {
+        screen: screenData,
+        org_active: data.org_active,
+        subscription_active: data.subscription_active,
+        subscription_end_date: data.subscription_end_date,
+        items: nextItems,
+        fingerprint: data.fingerprint
+      })
 
       // ============== Cache management ==============
       // قبل ما نطبّق التغيير، نلغي العناصر القديمة من الكاش
@@ -517,8 +577,27 @@ export default function PlayerPage() {
       return { changed: true }
     } catch (err) {
       console.error('Player load error:', err)
-      // ⚠ مهم: لا نعرض شاشة خطأ إذا عندنا محتوى يعرض حالياً (offline-tolerance)
-      // فقط نعرض الخطأ في التحميل الأول
+
+      // ============== محاولة استعادة من snapshot ==============
+      // إذا فشل التحميل وعندنا snapshot سابق ناجح، نستخدمه بدلاً من شاشة خطأ
+      if (!preserveCurrent && itemsRef.current.length === 0) {
+        const snapshot = loadSnapshot(publicId)
+        if (snapshot && snapshot.items && snapshot.items.length > 0) {
+          console.warn('[Player] استعادة من snapshot offline')
+          setScreen(snapshot.screen)
+          setItems(snapshot.items)
+          setCurrentIdx(0)
+          setLayerAItem(snapshot.items[0] || null)
+          setLayerBItem(snapshot.items[1] || null)
+          setActiveLayer('a')
+          setStatus('ready')
+          fingerprintRef.current = snapshot.fingerprint
+          return { changed: false, networkError: true, fromSnapshot: true }
+        }
+      }
+
+      // لا snapshot أو شاشة شغّالة فعلاً — نتعامل حسب الحالة
+      // فقط نعرض الخطأ في التحميل الأول بلا snapshot
       if (!preserveCurrent || itemsRef.current.length === 0) {
         setStatus('error')
         setErrorKind('not_found')
@@ -561,15 +640,28 @@ export default function PlayerPage() {
   // ============================================================================
   // Soft reload كل ساعة (بدلاً من window.location.reload الكامل)
   // نعيد تحميل البيانات فقط، لا نمسح الـ SW أو الكاش
+  // إعادة جدولة بشكل متكرر بدلاً من setTimeout مرة واحدة (لتفادي توقفها بعد فشل)
   // ============================================================================
   useEffect(() => {
     if (status !== 'ready') return
-    reloadTimerRef.current = setTimeout(() => {
-      // إعادة تعيين البصمة لإجبار جلب كامل (للتعافي من أي انحراف)
-      fingerprintRef.current = null
-      loadData(true)
-    }, 60 * 60 * 1000)
-    return () => clearTimeout(reloadTimerRef.current)
+    let cancelled = false
+
+    function scheduleNext() {
+      if (cancelled) return
+      reloadTimerRef.current = setTimeout(async () => {
+        if (cancelled) return
+        // إعادة تعيين البصمة لإجبار جلب كامل (للتعافي من أي انحراف)
+        fingerprintRef.current = null
+        await loadData(true)
+        scheduleNext()  // إعادة جدولة بغض النظر عن النجاح
+      }, 60 * 60 * 1000)
+    }
+
+    scheduleNext()
+    return () => {
+      cancelled = true
+      clearTimeout(reloadTimerRef.current)
+    }
   }, [status, loadData])
 
   // ============================================================================
@@ -589,6 +681,16 @@ export default function PlayerPage() {
       }
       const result = await loadData(true)
       if (isCancelled) return
+
+      // تحديث حالة الاتصال
+      if (result.networkError) {
+        setIsOffline(true)
+        setOfflineSince((prev) => prev || Date.now())
+      } else {
+        setIsOffline(false)
+        setOfflineSince(null)
+      }
+
       const nextInterval = result.networkError
         ? POLL_FAST  // فشل شبكة — حاول بسرعة
         : computeNextInterval(result.changed)
@@ -715,6 +817,9 @@ export default function PlayerPage() {
 
   if (!currentItem) return null
 
+  // عرض مدة الانقطاع بشكل ودود
+  const offlineMinutes = offlineSince ? Math.floor((Date.now() - offlineSince) / 60000) : 0
+
   return (
     <div className="player-root">
       <div className="player-stage">
@@ -738,6 +843,29 @@ export default function PlayerPage() {
           />
         </div>
       </div>
+
+      {/* مؤشر offline — يظهر فقط بعد دقيقتين من الانقطاع لتفادي وميض على انقطاعات قصيرة */}
+      {isOffline && offlineMinutes >= 2 && (
+        <div
+          style={{
+            position: 'fixed',
+            bottom: 16,
+            insetInlineEnd: 16,
+            background: 'rgba(0,0,0,0.6)',
+            color: 'white',
+            padding: '6px 12px',
+            borderRadius: 8,
+            fontSize: 12,
+            fontFamily: 'inherit',
+            zIndex: 100,
+            backdropFilter: 'blur(8px)',
+            pointerEvents: 'none',
+            opacity: 0.8
+          }}
+        >
+          ⚠ بدون اتصال — يعرض من الذاكرة المؤقتة
+        </div>
+      )}
     </div>
   )
 }

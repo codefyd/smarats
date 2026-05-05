@@ -7,7 +7,28 @@ import {
   buildYouTubeEmbedUrl,
   buildDriveImageUrl
 } from '../lib/urlUtils'
+import {
+  registerPlayerSW,
+  precacheUrls,
+  invalidateUrls
+} from '../lib/swManager'
 
+// ============================================================================
+// سياسة Polling التكيّفية (Adaptive Polling)
+//   - بداية: 10 ثوانٍ
+//   - بعد 6 محاولات بدون تغيير (دقيقة): نرفع لـ 30 ثانية
+//   - بعد 30 محاولة بدون تغيير (15 دقيقة): نرفع لـ 60 ثانية
+//   - عند أي تغيير: نعيد لـ 10 ثوانٍ
+// ============================================================================
+const POLL_FAST = 10_000   // 10s
+const POLL_MED = 30_000    // 3000s
+const POLL_SLOW = 60_000   // 6000s
+const STEP_TO_MED = 6      // 6 × 10s = دقيقة
+const STEP_TO_SLOW = 30    // 30 × 10s/30s متراكم
+
+// ============================================================================
+// أدوات مساعدة
+// ============================================================================
 function arraysEqualByIdentity(a, b) {
   if (a.length !== b.length) return false
   for (let i = 0; i < a.length; i += 1) {
@@ -95,6 +116,18 @@ function preloadItem(item) {
   })
 }
 
+// ============================================================================
+// استخراج URLs للـ precache من قائمة العناصر
+// نتجاهل YouTube (Cross-Origin)، نخزّن فقط الصور والفيديوهات المباشرة و Drive
+// ============================================================================
+function getCachableUrls(items) {
+  if (!Array.isArray(items)) return []
+  return items
+    .filter((it) => it && it.item_type !== 'youtube')
+    .map((it) => it.resolved_url)
+    .filter(Boolean)
+}
+
 function MediaNode({ item, isActive, onEnded, onError, videoRef }) {
   useEffect(() => {
     const video = videoRef?.current
@@ -178,12 +211,26 @@ export default function PlayerPage() {
   const currentIdxRef = useRef(0)
   const activeLayerRef = useRef('a')
 
+  // ============== ETag state ==============
+  const fingerprintRef = useRef(null)         // البصمة الحالية المعروفة للعميل
+  const unchangedCountRef = useRef(0)         // عدد الـ polls المتتالية بدون تغيير
+  const pollIntervalRef = useRef(POLL_FAST)   // الفترة الحالية
+
   const videoARef = useRef(null)
   const videoBRef = useRef(null)
 
   useEffect(() => { itemsRef.current = items }, [items])
   useEffect(() => { currentIdxRef.current = currentIdx }, [currentIdx])
   useEffect(() => { activeLayerRef.current = activeLayer }, [activeLayer])
+
+  // ============================================================================
+  // تسجيل الـ Service Worker مرة واحدة
+  // ============================================================================
+  useEffect(() => {
+    registerPlayerSW().catch((err) => {
+      console.warn('SW registration failed:', err)
+    })
+  }, [])
 
   const clearAdvanceTimer = useCallback(() => {
     clearTimeout(advanceTimerRef.current)
@@ -302,45 +349,70 @@ export default function PlayerPage() {
     await swapToIndex(nextIndex)
   }, [getNextIndex, swapToIndex, replayCurrentIfSingle, clearAdvanceTimer, scheduleAdvance])
 
+  // ============================================================================
+  // تحديد الفترة التالية حسب نشاط الشاشة
+  // ============================================================================
+  const computeNextInterval = useCallback((didChange) => {
+    if (didChange) {
+      unchangedCountRef.current = 0
+      pollIntervalRef.current = POLL_FAST
+      return POLL_FAST
+    }
+    unchangedCountRef.current += 1
+    if (unchangedCountRef.current >= STEP_TO_SLOW) {
+      pollIntervalRef.current = POLL_SLOW
+    } else if (unchangedCountRef.current >= STEP_TO_MED) {
+      pollIntervalRef.current = POLL_MED
+    }
+    return pollIntervalRef.current
+  }, [])
+
+  // ============================================================================
+  // التحميل الموحّد عبر RPC الجديدة get_public_screen_state
+  // preserveCurrent: true عند polling — نحاول الإبقاء على العنصر الحالي
+  // ============================================================================
   const loadData = useCallback(async (preserveCurrent = false) => {
     try {
-      const { data: screenData, error: screenErr } = await supabase
-        .rpc('get_public_screen', { _public_id: publicId })
-        .maybeSingle()
+      const { data, error } = await supabase.rpc('get_public_screen_state', {
+        _public_id: publicId,
+        _client_fingerprint: fingerprintRef.current
+      })
 
-      if (screenErr) throw screenErr
+      if (error) throw error
 
-      if (!screenData) {
+      // الشاشة غير موجودة
+      if (!data || data.error === 'not_found' || !data.screen) {
         setStatus('error')
         setErrorKind('not_found')
         setErrorMsg('الشاشة غير موجودة')
-        return
+        return { changed: false }
       }
 
+      const screenData = data.screen
+
+      // تحقق الحالات قبل أي شيء
       if (!screenData.is_active) {
         setStatus('error')
         setErrorKind('inactive')
         setErrorMsg('الشاشة متوقفة حالياً')
-        return
+        return { changed: false }
       }
-
-      if (!screenData.organization_active) {
+      if (!data.org_active) {
         setStatus('error')
         setErrorKind('inactive')
         setErrorMsg('الجهة غير نشطة')
-        return
+        return { changed: false }
       }
-
-      // فحص الاشتراك — جديد
-      if (!screenData.subscription_active) {
+      if (!data.subscription_active) {
         setStatus('error')
         setErrorKind('expired')
         setErrorMsg('الاشتراك منتهي')
-        return
+        return { changed: false }
       }
 
       setScreen(screenData)
 
+      // التحقق من كلمة السر — قبل التعامل مع العناصر
       if (screenData.has_password) {
         const unlocked =
           sessionStorage.getItem(`smarats_unlock_${publicId}`) ||
@@ -348,24 +420,46 @@ export default function PlayerPage() {
 
         if (!unlocked) {
           navigate(`/s/${publicId}/unlock`)
-          return
+          return { changed: false }
         }
       }
 
-      const { data: itemsData, error: itemsErr } = await supabase
-        .rpc('get_public_playlist_items', { _public_id: publicId })
+      // ============== لا تغيير → نخرج بدون لمس state ==============
+      if (data.changed === false) {
+        // فقط تأكد أن البصمة محفوظة (في حال أول استدعاء كان null)
+        if (data.fingerprint) fingerprintRef.current = data.fingerprint
+        return { changed: false }
+      }
 
-      if (itemsErr) throw itemsErr
+      // ============== تغيّرت → نحدّث ==============
+      const itemsData = data.items || []
 
-      if (!itemsData || itemsData.length === 0) {
+      if (itemsData.length === 0) {
+        // قائمة فارغة بعد التغيير
         setStatus('error')
         setErrorKind('no_items')
         setErrorMsg('لا توجد عناصر في قائمة العرض')
-        return
+        fingerprintRef.current = data.fingerprint
+        return { changed: true }
       }
 
       const nextItems = itemsData.map(normalizePlayableItem)
 
+      // ============== Cache management ==============
+      // قبل ما نطبّق التغيير، نلغي العناصر القديمة من الكاش
+      const oldUrls = getCachableUrls(itemsRef.current)
+      const newUrls = getCachableUrls(nextItems)
+      const newUrlSet = new Set(newUrls)
+      const removedUrls = oldUrls.filter((u) => !newUrlSet.has(u))
+      if (removedUrls.length > 0) {
+        invalidateUrls(removedUrls).catch(() => {})
+      }
+      // نطلب precache للعناصر الجديدة (في الخلفية)
+      if (newUrls.length > 0) {
+        precacheUrls(newUrls).catch(() => {})
+      }
+
+      // ============== أول تحميل ==============
       if (!preserveCurrent) {
         setItems(nextItems)
         setCurrentIdx(0)
@@ -373,15 +467,18 @@ export default function PlayerPage() {
         setLayerBItem(nextItems[1] || null)
         setActiveLayer('a')
         setStatus('ready')
-        return
+        fingerprintRef.current = data.fingerprint
+        return { changed: true }
       }
 
+      // ============== تحديث أثناء العرض ==============
       const prevItems = itemsRef.current
       const currentItem = prevItems[currentIdxRef.current]
 
       if (arraysEqualByIdentity(prevItems, nextItems)) {
         setStatus('ready')
-        return
+        fingerprintRef.current = data.fingerprint
+        return { changed: true }
       }
 
       setItems(nextItems)
@@ -392,7 +489,8 @@ export default function PlayerPage() {
         setLayerBItem(nextItems[1] || null)
         setActiveLayer('a')
         setStatus('ready')
-        return
+        fingerprintRef.current = data.fingerprint
+        return { changed: true }
       }
 
       const sameItemNewIndex = nextItems.findIndex((i) => i.id === currentItem.id)
@@ -415,16 +513,27 @@ export default function PlayerPage() {
       }
 
       setStatus('ready')
+      fingerprintRef.current = data.fingerprint
+      return { changed: true }
     } catch (err) {
       console.error('Player load error:', err)
-      setStatus('error')
-      setErrorKind('not_found')
-      setErrorMsg(err.message || 'حدث خطأ')
+      // ⚠ مهم: لا نعرض شاشة خطأ إذا عندنا محتوى يعرض حالياً (offline-tolerance)
+      // فقط نعرض الخطأ في التحميل الأول
+      if (!preserveCurrent || itemsRef.current.length === 0) {
+        setStatus('error')
+        setErrorKind('not_found')
+        setErrorMsg(err.message || 'حدث خطأ')
+      }
+      return { changed: false, networkError: true }
     }
   }, [publicId, navigate])
 
+  // التحميل الأول
   useEffect(() => { loadData(false) }, [loadData])
 
+  // ============================================================================
+  // Wake Lock (الإبقاء على الشاشة مضاءة)
+  // ============================================================================
   useEffect(() => {
     if (status !== 'ready') return
 
@@ -449,26 +558,77 @@ export default function PlayerPage() {
     }
   }, [status])
 
+  // ============================================================================
+  // Soft reload كل ساعة (بدلاً من window.location.reload الكامل)
+  // نعيد تحميل البيانات فقط، لا نمسح الـ SW أو الكاش
+  // ============================================================================
   useEffect(() => {
     if (status !== 'ready') return
-    reloadTimerRef.current = setTimeout(() => { window.location.reload() }, 60 * 60 * 1000)
+    reloadTimerRef.current = setTimeout(() => {
+      // إعادة تعيين البصمة لإجبار جلب كامل (للتعافي من أي انحراف)
+      fingerprintRef.current = null
+      loadData(true)
+    }, 60 * 60 * 1000)
     return () => clearTimeout(reloadTimerRef.current)
-  }, [status])
-
-  useEffect(() => {
-    if (status !== 'ready') return
-    pollTimerRef.current = setInterval(() => { loadData(true) }, 10000)
-    return () => clearInterval(pollTimerRef.current)
   }, [status, loadData])
 
-  // عند الخطأ — إعادة المحاولة. للاشتراك المنتهي فترة أطول (5 دقائق بدل 30 ثانية)
+  // ============================================================================
+  // Adaptive Polling
+  // ============================================================================
+  useEffect(() => {
+    if (status !== 'ready') return
+
+    let isCancelled = false
+
+    async function poll() {
+      if (isCancelled) return
+      if (document.visibilityState !== 'visible') {
+        // التبويب في الخلفية — أجّل
+        pollTimerRef.current = setTimeout(poll, POLL_SLOW)
+        return
+      }
+      const result = await loadData(true)
+      if (isCancelled) return
+      const nextInterval = result.networkError
+        ? POLL_FAST  // فشل شبكة — حاول بسرعة
+        : computeNextInterval(result.changed)
+      pollTimerRef.current = setTimeout(poll, nextInterval)
+    }
+
+    pollTimerRef.current = setTimeout(poll, pollIntervalRef.current)
+
+    // عند العودة من background → poll فوري
+    function onVisible() {
+      if (document.visibilityState === 'visible') {
+        clearTimeout(pollTimerRef.current)
+        poll()
+      }
+    }
+    document.addEventListener('visibilitychange', onVisible)
+
+    return () => {
+      isCancelled = true
+      clearTimeout(pollTimerRef.current)
+      document.removeEventListener('visibilitychange', onVisible)
+    }
+  }, [status, loadData, computeNextInterval])
+
+  // ============================================================================
+  // إعادة المحاولة عند الخطأ
+  // ============================================================================
   useEffect(() => {
     if (status !== 'error') return
     const retryMs = errorKind === 'expired' ? 5 * 60 * 1000 : 30 * 1000
-    const t = setTimeout(() => loadData(false), retryMs)
+    const t = setTimeout(() => {
+      fingerprintRef.current = null  // إعادة تعيين البصمة عند الخطأ
+      loadData(false)
+    }, retryMs)
     return () => clearTimeout(t)
   }, [status, errorKind, loadData])
 
+  // ============================================================================
+  // التقدّم بين العناصر
+  // ============================================================================
   useEffect(() => {
     if (status !== 'ready' || items.length === 0) return
 
@@ -519,7 +679,6 @@ export default function PlayerPage() {
   }
 
   if (status === 'error') {
-    // شاشة "الاشتراك منتهي" — تصميم خاص مهيب
     if (errorKind === 'expired') {
       return (
         <div className="player-root flex items-center justify-center p-6">
@@ -544,7 +703,7 @@ export default function PlayerPage() {
           <h1 className="text-2xl font-bold mb-2">{errorMsg}</h1>
           <p className="text-sm opacity-60 mb-4">سيتم المحاولة مرة أخرى تلقائياً خلال 30 ثانية</p>
           <button
-            onClick={() => loadData(false)}
+            onClick={() => { fingerprintRef.current = null; loadData(false) }}
             className="px-4 py-2 bg-white/10 hover:bg-white/20 rounded-lg text-sm"
           >
             إعادة المحاولة الآن

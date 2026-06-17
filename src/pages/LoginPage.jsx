@@ -20,10 +20,16 @@ export default function LoginPage() {
       // نتركه للـ AuthProvider ليحمّل الدور، ثم نوجّه
       setTimeout(() => navigate('/dashboard'), 100)
     } catch (err) {
-      setError(err.message === 'Invalid login credentials' ? 'بيانات الدخول غير صحيحة' : err.message)
-    } finally {
-      setLoading(false)
-    }
+  const msg = err?.message || ''
+
+  if (msg.includes('Failed to fetch')) {
+    setError('تعذر الاتصال بسوبابيس. تأكد أن المشروع يعمل وأن رابط VITE_SUPABASE_URL صحيح ثم أعد النشر.')
+  } else {
+    setError(msg === 'Invalid login credentials' ? 'بيانات الدخول غير صحيحة' : msg)
+  }
+} finally {
+  setLoading(false)
+}
   }
 
   return (

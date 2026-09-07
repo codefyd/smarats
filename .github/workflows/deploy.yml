@@ -6,7 +6,7 @@ on:
   workflow_dispatch:
 
 permissions:
-  contents: read
+  contents: write
   pages: write
   id-token: write
 
@@ -37,6 +37,17 @@ jobs:
 
       - name: Copy 404.html for SPA routing
         run: cp dist/index.html dist/404.html
+
+      - name: Publish build for Cloudflare Pages
+        run: |
+          cd dist
+          git init
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git checkout -b cloudflare-pages
+          git add -A
+          git commit -m "Build ${GITHUB_SHA}"
+          git push --force "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}.git" cloudflare-pages
 
       - name: Upload artifact
         uses: actions/upload-pages-artifact@v3
